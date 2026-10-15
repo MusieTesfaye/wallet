@@ -1,325 +1,77 @@
 <script setup lang="ts">
-import { 
-  ArrowUpRight, 
-  ArrowDownLeft, 
-  Clock, 
-  Copy, 
-  Check 
-} from 'lucide-vue-next';
-import { ref } from 'vue';
-import type { TransactionRecord } from '../types';
-import { formatAddress, formatUsdc } from '../crypto/keyless';
+import { ArrowUpRight, ArrowDownLeft, Activity } from 'lucide-vue-next';
+import type { FeeAsset, HistoryEntry } from '../services/rpc';
+import type { KeylessAccount } from '../services/auth';
+import { formatAmount, shortAddress } from '../services/wallet';
 
 const props = defineProps<{
-  transactions: TransactionRecord[];
-  currentAddress: string;
+  entries: HistoryEntry[];
+  address: string;
+  assets: FeeAsset[];
+  contacts: KeylessAccount[];
+  faucet: string | null;
 }>();
 
-const copiedHash = ref<string | null>(null);
+const symbol = (id?: number) => props.assets.find((a) => a.asset === id)?.symbol ?? `asset ${id}`;
 
-function copyHash(hash: string) {
-  navigator.clipboard.writeText(hash);
-  copiedHash.value = hash;
-  setTimeout(() => (copiedHash.value = null), 1500);
+function who(address?: string) {
+  if (!address) return '';
+  if (address === props.faucet) return 'Faucet';
+  const c = props.contacts.find((x) => x.address === address);
+  return c ? c.name.split(' ')[0] : shortAddress(address, 6, 4);
 }
 
-function timeAgo(timestamp: number): string {
-  const diffSec = Math.floor((Date.now() - timestamp) / 1000);
-  if (diffSec < 5) return 'Just now';
-  if (diffSec < 60) return `${diffSec}s ago`;
-  const diffMin = Math.floor(diffSec / 60);
-  if (diffMin < 60) return `${diffMin}m ago`;
-  return `${Math.floor(diffMin / 60)}h ago`;
-}
+const outgoing = (e: HistoryEntry) => e.transaction.sender === props.address;
+const time = (e: HistoryEntry) => (e.timestamp ? new Date(e.timestamp * 1000).toLocaleString() : 'queued');
 </script>
 
 <template>
-  <div class="activity-card">
-    <div class="activity-header">
-      <h4>Recent Activity</h4>
-      <span class="activity-count">{{ transactions.length }} transactions</span>
+  <div class="card">
+    <div class="card-title"><Activity :size="18" /> Activity</div>
+    <div v-if="entries.length === 0" class="empty muted">
+      Nothing yet. Ask the faucet for coins, or share your address.
     </div>
-
-    <div v-if="transactions.length === 0" class="empty-state">
-      <div class="empty-icon">
-        <Clock :size="24" />
-      </div>
-      <p class="empty-title">No transactions yet</p>
-      <p class="empty-desc">Send testnet USDC or claim testnet tokens to see real-time block activity.</p>
-    </div>
-
-    <div v-else class="tx-list">
-      <div 
-        v-for="tx in transactions" 
-        :key="tx.hash" 
-        class="tx-item"
-      >
-        <div class="tx-icon" :class="tx.sender.toLowerCase() === currentAddress.toLowerCase() ? 'sent' : 'received'">
-          <ArrowUpRight v-if="tx.sender.toLowerCase() === currentAddress.toLowerCase()" :size="16" />
-          <ArrowDownLeft v-else :size="16" />
-        </div>
-
-        <div class="tx-main">
-          <div class="tx-title-row">
-            <span class="tx-type">
-              {{ tx.sender.toLowerCase() === currentAddress.toLowerCase() ? 'Sent USDC' : 'Received USDC' }}
+    <ul v-else class="list">
+      <li v-for="e in entries" :key="e.hash" class="row" :title="e.hash">
+        <span class="icon" :class="outgoing(e) ? 'out' : 'in'">
+          <ArrowUpRight v-if="outgoing(e)" :size="16" /><ArrowDownLeft v-else :size="16" />
+        </span>
+        <div class="main">
+          <div class="line">
+            <span v-if="e.transaction.payload.kind === 'transfer'">
+              {{ outgoing(e) ? 'To' : 'From' }} {{ outgoing(e) ? who(e.transaction.payload.to) : who(e.transaction.sender) }}
             </span>
-            <span class="tx-amount" :class="tx.sender.toLowerCase() === currentAddress.toLowerCase() ? 'negative' : 'positive'">
-              {{ tx.sender.toLowerCase() === currentAddress.toLowerCase() ? '-' : '+' }}${{ formatUsdc(tx.amountUsdc) }}
+            <span v-else>{{ e.transaction.payload.kind }}</span>
+            <span class="amount mono" :class="outgoing(e) ? 'neg' : 'pos'" v-if="e.transaction.payload.amount">
+              {{ outgoing(e) ? '−' : '+' }}{{ formatAmount(BigInt(e.transaction.payload.amount)) }}
+              {{ symbol(e.transaction.payload.asset) }}
             </span>
           </div>
-
-          <div class="tx-subtitle-row">
-            <span class="tx-peer">
-              To: {{ tx.recipientEmail || formatAddress(tx.recipient, 6, 4) }}
+          <div class="sub muted">
+            <span>{{ time(e) }}</span>
+            <span v-if="outgoing(e) && e.fee_paid">fee {{ formatAmount(BigInt(e.fee_paid)) }} {{ symbol(e.transaction.fee_asset) }}</span>
+            <span class="pill" :class="e.confirmation.status === 'pending' ? 'pill-wait' : 'pill-ok'">
+              {{ e.confirmation.status === 'pending' ? 'pending' : e.confirmation.status === 'finalized' ? 'final' : `block #${e.confirmation.height}` }}
             </span>
-            <span class="tx-time">{{ timeAgo(tx.timestamp) }}</span>
-          </div>
-
-          <div class="tx-footer">
-            <div class="tx-status" :class="tx.status">
-              <span class="dot"></span>
-              <span v-if="tx.status === 'pending'">Mempool Pending</span>
-              <span v-else-if="tx.status === 'soft_confirmed'">Soft Confirmed (Block #{{ tx.blockHeight || 1 }})</span>
-              <span v-else>Aptos L1 Finalized</span>
-            </div>
-
-            <button @click="copyHash(tx.hash)" class="btn-hash" title="Copy transaction hash">
-              <span class="hash-text">{{ formatAddress(tx.hash, 6, 4) }}</span>
-              <Check v-if="copiedHash === tx.hash" :size="12" class="copied" />
-              <Copy v-else :size="12" />
-            </button>
           </div>
         </div>
-      </div>
-    </div>
+      </li>
+    </ul>
   </div>
 </template>
 
 <style scoped>
-.activity-card {
-  background: rgba(13, 18, 34, 0.7);
-  border: 1px solid rgba(255, 255, 255, 0.08);
-  border-radius: 20px;
-  padding: 24px;
-  backdrop-filter: blur(16px);
-  margin-top: 24px;
-}
-
-.activity-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  margin-bottom: 18px;
-}
-
-.activity-header h4 {
-  font-family: 'Outfit', sans-serif;
-  font-size: 1.1rem;
-  font-weight: 700;
-  color: #f1f5f9;
-  margin: 0;
-}
-
-.activity-count {
-  font-size: 0.75rem;
-  color: #64748b;
-  font-weight: 600;
-}
-
-.empty-state {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  padding: 36px 20px;
-  text-align: center;
-}
-
-.empty-icon {
-  width: 48px;
-  height: 48px;
-  border-radius: 50%;
-  background: rgba(255, 255, 255, 0.04);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  color: #475569;
-  margin-bottom: 12px;
-}
-
-.empty-title {
-  font-size: 0.95rem;
-  font-weight: 600;
-  color: #94a3b8;
-  margin: 0 0 4px 0;
-}
-
-.empty-desc {
-  font-size: 0.8rem;
-  color: #64748b;
-  max-width: 320px;
-  margin: 0;
-}
-
-.tx-list {
-  display: flex;
-  flex-direction: column;
-  gap: 12px;
-}
-
-.tx-item {
-  display: flex;
-  align-items: flex-start;
-  gap: 14px;
-  background: rgba(255, 255, 255, 0.02);
-  border: 1px solid rgba(255, 255, 255, 0.05);
-  border-radius: 14px;
-  padding: 14px 16px;
-  transition: all 0.2s;
-}
-
-.tx-item:hover {
-  background: rgba(255, 255, 255, 0.05);
-  border-color: rgba(255, 255, 255, 0.1);
-}
-
-.tx-icon {
-  width: 36px;
-  height: 36px;
-  border-radius: 50%;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  flex-shrink: 0;
-  margin-top: 2px;
-}
-
-.tx-icon.sent {
-  background: rgba(244, 63, 94, 0.12);
-  color: #fb7185;
-}
-
-.tx-icon.received {
-  background: rgba(16, 185, 129, 0.12);
-  color: #34d399;
-}
-
-.tx-main {
-  flex: 1;
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-}
-
-.tx-title-row {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-}
-
-.tx-type {
-  font-size: 0.9rem;
-  font-weight: 600;
-  color: #f1f5f9;
-}
-
-.tx-amount {
-  font-family: 'Outfit', sans-serif;
-  font-size: 1rem;
-  font-weight: 700;
-}
-
-.tx-amount.negative {
-  color: #f87171;
-}
-
-.tx-amount.positive {
-  color: #34d399;
-}
-
-.tx-subtitle-row {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  font-size: 0.78rem;
-  color: #64748b;
-}
-
-.tx-peer {
-  font-family: 'JetBrains Mono', monospace;
-  font-size: 0.72rem;
-  color: #94a3b8;
-}
-
-.tx-footer {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  margin-top: 6px;
-  padding-top: 6px;
-  border-top: 1px solid rgba(255, 255, 255, 0.04);
-}
-
-.tx-status {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  font-size: 0.72rem;
-  font-weight: 600;
-}
-
-.tx-status .dot {
-  width: 6px;
-  height: 6px;
-  border-radius: 50%;
-}
-
-.tx-status.pending {
-  color: #fbbf24;
-}
-.tx-status.pending .dot {
-  background: #fbbf24;
-  box-shadow: 0 0 6px #fbbf24;
-}
-
-.tx-status.soft_confirmed {
-  color: #38bdf8;
-}
-.tx-status.soft_confirmed .dot {
-  background: #06b6d4;
-  box-shadow: 0 0 6px #06b6d4;
-}
-
-.tx-status.finalized {
-  color: #34d399;
-}
-.tx-status.finalized .dot {
-  background: #10b981;
-  box-shadow: 0 0 6px #10b981;
-}
-
-.btn-hash {
-  display: flex;
-  align-items: center;
-  gap: 4px;
-  background: transparent;
-  border: none;
-  font-family: 'JetBrains Mono', monospace;
-  font-size: 0.68rem;
-  color: #64748b;
-  cursor: pointer;
-  padding: 2px 6px;
-  border-radius: 4px;
-  transition: all 0.2s;
-}
-
-.btn-hash:hover {
-  background: rgba(255, 255, 255, 0.06);
-  color: #cbd5e1;
-}
-
-.copied {
-  color: #10b981;
-}
+.card-title { display: flex; align-items: center; gap: 8px; }
+.empty { font-size: 0.88rem; padding: 12px 0; }
+.list { list-style: none; display: flex; flex-direction: column; gap: 4px; }
+.row { display: flex; gap: 12px; align-items: center; padding: 10px 4px; border-bottom: 1px solid var(--border-subtle); }
+.row:last-child { border-bottom: none; }
+.icon { width: 34px; height: 34px; flex: none; border-radius: 10px; display: flex; align-items: center; justify-content: center; }
+.icon.in { background: rgba(16, 185, 129, 0.12); color: var(--emerald-400); }
+.icon.out { background: rgba(56, 189, 248, 0.1); color: var(--cyan-400); }
+.main { flex: 1; min-width: 0; }
+.line { display: flex; justify-content: space-between; gap: 8px; font-size: 0.9rem; font-weight: 600; flex-wrap: wrap; }
+.amount.pos { color: var(--emerald-400); }
+.amount.neg { color: var(--text-primary); }
+.sub { display: flex; gap: 10px; align-items: center; font-size: 0.74rem; margin-top: 3px; flex-wrap: wrap; }
 </style>

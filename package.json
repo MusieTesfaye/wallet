@@ -1,21 +1,26 @@
 {
-  "name": "frontend",
+  "name": "sena-wallet",
   "private": true,
   "version": "0.0.0",
   "type": "module",
   "scripts": {
     "dev": "vite",
+    "faucet": "bun server.ts",
     "build": "vue-tsc -b && vite build",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "test:e2e": "bun scripts/e2e.ts"
   },
   "dependencies": {
     "lucide-vue-next": "^1.0.0",
-    "vue": "^3.5.42"
+    "vue": "^3.5.42",
+    "qrcode": "^1.5.4"
   },
   "devDependencies": {
     "@types/node": "^24.13.3",
+    "@types/qrcode": "^1.5.5",
     "@vitejs/plugin-vue": "^6.0.8",
     "@vue/tsconfig": "^0.9.1",
+    "playwright-core": "1.56.0",
     "typescript": "~6.0.2",
     "vite": "^8.3.0",
     "vue-tsc": "^3.3.11"

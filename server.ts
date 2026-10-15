@@ -1,373 +1,105 @@
-// Bun SQLite + WebSocket Streaming Server for SENA Keyless Wallet
-import { Database } from "bun:sqlite";
+// SENA devnet faucet.
+//
+// Sends stablecoins from the faucet account that scripts/wallet-devnet.py in
+// the SENA repo funds at genesis, as ordinary signed transfers through the
+// node: the wallet sees them arrive like any other payment. It holds the
+// faucet's Ed25519 key, so run it only on a devnet.
+//
+//   bun run faucet        (reads FAUCET_KEY_FILE and VITE_SENA_RPC_URL from .env)
 
-const PORT = 3001;
-const DB_PATH = "wallet.db";
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
+import { initSync, buildTransfer, signEd25519, ed25519Address, submitRequest } from "./src/sena/sena_wasm.js";
 
-// Initialize SQLite Database
-const db = new Database(DB_PATH);
-db.run("PRAGMA journal_mode = WAL;");
+initSync({ module: readFileSync(fileURLToPath(new URL("./src/sena/sena_wasm_bg.wasm", import.meta.url))) });
 
-// Create Tables
-db.run(`
-  CREATE TABLE IF NOT EXISTS accounts (
-    address TEXT PRIMARY KEY,
-    email TEXT,
-    name TEXT,
-    picture TEXT,
-    sub TEXT,
-    aud TEXT,
-    ephemeral_public_key TEXT,
-    ephemeral_private_key TEXT,
-    zk_proof TEXT,
-    nonce INTEGER DEFAULT 0,
-    usdc_balance INTEGER DEFAULT 0,
-    sena_balance INTEGER DEFAULT 0,
-    created_at INTEGER
-  );
-`);
+const PORT = Number(process.env.FAUCET_PORT ?? 3001);
+const RPC = process.env.VITE_SENA_RPC_URL ?? "http://127.0.0.1:8545";
+const ORIGINS = (process.env.WALLET_ORIGINS ?? "http://localhost:5173,http://127.0.0.1:5173").split(",");
+const DRIP = 100_000_000n; // 100.00 of a six-decimal stablecoin
+const COOLDOWN_MS = 60_000;
 
-db.run(`
-  CREATE TABLE IF NOT EXISTS transactions (
-    id TEXT PRIMARY KEY,
-    hash TEXT UNIQUE,
-    sender TEXT,
-    sender_email TEXT,
-    recipient TEXT,
-    recipient_email TEXT,
-    amount_usdc INTEGER,
-    fee_usdc INTEGER,
-    status TEXT,
-    block_height INTEGER,
-    epk_signature TEXT,
-    timestamp INTEGER
-  );
-`);
+const keyFile = process.env.FAUCET_KEY_FILE;
+if (!keyFile) {
+  console.error("Set FAUCET_KEY_FILE to the faucet.json scripts/wallet-devnet.py wrote.");
+  process.exit(1);
+}
+const { secret } = JSON.parse(readFileSync(keyFile, "utf8")) as { secret: string };
+const FAUCET = ed25519Address(secret);
 
-db.run(`
-  CREATE TABLE IF NOT EXISTS stream_events (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    event_type TEXT,
-    payload TEXT,
-    timestamp INTEGER
-  );
-`);
-
-console.log(`[SQLite] Database initialized at ${DB_PATH}`);
-
-// Seed initial accounts (Alice & Bob) if not present
-const existingAlice = db.query("SELECT address FROM accounts WHERE email = ?").get("alice@gmail.com");
-if (!existingAlice) {
-  db.run(`
-    INSERT INTO accounts (address, email, name, picture, sub, aud, ephemeral_public_key, zk_proof, nonce, usdc_balance, sena_balance, created_at)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-  `, [
-    "0x812d45a7d656897c8cf4234586d1234567890abcdef1234567890abcdef581e831b",
-    "alice@gmail.com",
-    "Alice Walker",
-    "https://images.unsplash.com/photo-1494790108377-be9c29b29330?w=150&auto=format&fit=crop&q=80",
-    "google-oauth2|alice-10928374",
-    "sena-mobile-wallet-v1",
-    "0x00",
-    "0x00",
-    0,
-    10_000_000, // 10.00 USDC
-    50_000_000,
-    Date.now() - 1000
-  ]);
-  console.log("[SQLite] Seeded Account 1: Alice Walker (10.00 USDC)");
+async function rpc(method: string, params?: unknown): Promise<any> {
+  const r = await fetch(RPC, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(params === undefined ? { method } : { method, params }),
+  });
+  return r.json();
 }
 
-const existingBob = db.query("SELECT address FROM accounts WHERE email = ?").get("bob@gmail.com");
-if (!existingBob) {
-  db.run(`
-    INSERT INTO accounts (address, email, name, picture, sub, aud, ephemeral_public_key, zk_proof, nonce, usdc_balance, sena_balance, created_at)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-  `, [
-    "0x629f259b1234567890abcdef1234567890abcdef1234567890abcdef7489e9d4",
-    "bob@gmail.com",
-    "Bob Martinez",
-    "https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?w=150&auto=format&fit=crop&q=80",
-    "google-oauth2|bob-8839210",
-    "sena-mobile-wallet-v1",
-    "0x00",
-    "0x00",
-    0,
-    5_000_000, // 5.00 USDC
-    50_000_000,
-    Date.now()
+// Transfers from one account must carry consecutive nonces, so they are sent
+// one at a time.
+let queue: Promise<unknown> = Promise.resolve();
+const serial = <T>(f: () => Promise<T>): Promise<T> => {
+  const next = queue.then(f, f);
+  queue = next.catch(() => undefined);
+  return next;
+};
+const lastDrip = new Map<string, number>();
+
+async function drip(to: string, asset: number) {
+  const [quote, account, pending] = await Promise.all([
+    rpc("sena_gasPrice", { asset }),
+    rpc("sena_getAccount", { address: FAUCET }),
+    rpc("sena_getAccountTransactions", { address: FAUCET, limit: 100 }),
   ]);
-  console.log("[SQLite] Seeded Account 2: Bob Martinez (5.00 USDC)");
+  if (quote.result === "error") throw new Error(quote.message);
+  // The account's nonce counts included transactions; queued ones are ahead.
+  const queued = (pending.transactions ?? []).filter(
+    (t: any) => t.confirmation.status === "pending" && t.transaction.sender === FAUCET,
+  ).length;
+  const tx = buildTransfer(FAUCET, BigInt(account.nonce + queued), to, asset, DRIP.toString(), asset,
+    quote.rate, BigInt(quote.intrinsic_gas), quote.suggested_max_fee_per_gas, "0");
+  const signed = signEd25519(tx, secret);
+  const res = await fetch(RPC, { method: "POST", headers: { "Content-Type": "application/json" }, body: submitRequest(signed) });
+  const out = await res.json();
+  if (out.result !== "submitted") throw new Error(out.message ?? "the node refused the transfer");
+  return out.hash as string;
 }
 
-// Global Block Height simulation tracking
-let currentBlockHeight = 1;
-
-// Bun HTTP + WebSocket Server
-const server = Bun.serve({
+Bun.serve({
   port: PORT,
-  fetch(req, server) {
+  async fetch(req) {
+    const origin = req.headers.get("Origin") ?? "";
+    const cors: Record<string, string> = ORIGINS.includes(origin)
+      ? { "Access-Control-Allow-Origin": origin, "Access-Control-Allow-Methods": "POST, OPTIONS", "Access-Control-Allow-Headers": "Content-Type", Vary: "Origin" }
+      : {};
+    const json = (body: unknown, status = 200) => Response.json(body, { status, headers: cors });
+    if (req.method === "OPTIONS") return new Response(null, { status: 204, headers: cors });
+
     const url = new URL(req.url);
-
-    // 1. WebSocket Upgrade
-    if (url.pathname === "/ws") {
-      const upgraded = server.upgrade(req);
-      if (upgraded) return undefined;
-      return new Response("WebSocket upgrade failed", { status: 400 });
-    }
-
-    // CORS Headers
-    const corsHeaders = {
-      "Access-Control-Allow-Origin": "*",
-      "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
-      "Access-Control-Allow-Headers": "Content-Type",
-    };
-
-    if (req.method === "OPTIONS") {
-      return new Response(null, { headers: corsHeaders });
-    }
-
-    // 2. REST Endpoints
-    // GET /api/accounts
-    if (url.pathname === "/api/accounts" && req.method === "GET") {
-      const rows = db.query("SELECT * FROM accounts ORDER BY created_at DESC").all();
-      return Response.json(rows, { headers: corsHeaders });
-    }
-
-    // POST /api/accounts (Upsert Account)
-    if (url.pathname === "/api/accounts" && req.method === "POST") {
-      return (async () => {
-        try {
-          const body: any = await req.json();
-          const existing = db.query("SELECT address FROM accounts WHERE address = ?").get(body.address);
-          if (existing) {
-            db.run(`
-              UPDATE accounts SET 
-                email = ?, name = ?, picture = ?, ephemeral_public_key = ?, ephemeral_private_key = ?, zk_proof = ?
-              WHERE address = ?
-            `, [body.email, body.name, body.picture, body.ephemeralPublicKeyHex, body.ephemeralPrivateKeyHex, body.zkProofHex, body.address]);
-          } else {
-            db.run(`
-              INSERT INTO accounts (address, email, name, picture, sub, aud, ephemeral_public_key, ephemeral_private_key, zk_proof, nonce, usdc_balance, sena_balance, created_at)
-              VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            `, [
-              body.address,
-              body.email,
-              body.name,
-              body.picture,
-              body.sub,
-              body.aud,
-              body.ephemeralPublicKeyHex,
-              body.ephemeralPrivateKeyHex,
-              body.zkProofHex,
-              body.nonce || 0,
-              body.balances?.usdc || 0,
-              body.balances?.sena || 50_000_000,
-              Date.now()
-            ]);
-          }
-
-          // Broadcast account created/updated
-          server.publish("wallet-stream", JSON.stringify({
-            type: "ACCOUNT_UPSERTED",
-            address: body.address,
-            email: body.email,
-            name: body.name,
-            timestamp: Date.now()
-          }));
-
-          return Response.json({ success: true, address: body.address }, { headers: corsHeaders });
-        } catch (err: any) {
-          return Response.json({ error: err.message }, { status: 400, headers: corsHeaders });
-        }
-      })();
-    }
-
-    // POST /api/faucet (Claim +50 USDC)
-    if (url.pathname === "/api/faucet" && req.method === "POST") {
-      return (async () => {
-        try {
-          const { address, amount = 50_000_000 } = await req.json();
-          db.run("UPDATE accounts SET usdc_balance = usdc_balance + ? WHERE address = ?", [amount, address]);
-          const updated: any = db.query("SELECT * FROM accounts WHERE address = ?").get(address);
-
-          const eventPayload = {
-            type: "FAUCET_CLAIMED",
-            address,
-            amountAdded: amount,
-            newBalance: updated ? updated.usdc_balance : amount,
-            timestamp: Date.now()
-          };
-
-          db.run("INSERT INTO stream_events (event_type, payload, timestamp) VALUES (?, ?, ?)", [
-            "FAUCET_CLAIMED", JSON.stringify(eventPayload), Date.now()
-          ]);
-
-          server.publish("wallet-stream", JSON.stringify(eventPayload));
-
-          return Response.json(eventPayload, { headers: corsHeaders });
-        } catch (err: any) {
-          return Response.json({ error: err.message }, { status: 400, headers: corsHeaders });
-        }
-      })();
-    }
-
-    // POST /api/transfer (Execute Transfer & Stream over WebSockets)
-    if (url.pathname === "/api/transfer" && req.method === "POST") {
-      return (async () => {
-        try {
-          const { sender, recipient, amountUsdc, feeUsdc = 1000, epkSignatureHex, zkProofHex, senderEmail, recipientEmail } = await req.json();
-
-          let senderRow: any = db.query("SELECT * FROM accounts WHERE address = ?").get(sender);
-          if (!senderRow) {
-            db.run(`
-              INSERT INTO accounts (address, email, name, picture, sub, aud, ephemeral_public_key, zk_proof, nonce, usdc_balance, sena_balance, created_at)
-              VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, 10000000, 50000000, ?)
-            `, [
-              sender,
-              senderEmail || "user@sena.network",
-              senderEmail ? senderEmail.split("@")[0] : "Keyless User",
-              `https://api.dicebear.com/7.x/identicon/svg?seed=${encodeURIComponent(sender)}`,
-              "google-oauth2|dynamic",
-              "sena-mobile-wallet-v1",
-              "0x00",
-              "0x00",
-              Date.now()
-            ]);
-            senderRow = db.query("SELECT * FROM accounts WHERE address = ?").get(sender);
-          }
-
-          if (senderRow.usdc_balance < (amountUsdc + feeUsdc)) {
-            return Response.json({ error: "Insufficient USDC balance" }, { status: 400, headers: corsHeaders });
-          }
-
-          const txHash = "0x" + Array.from(crypto.getRandomValues(new Uint8Array(32)))
-            .map(b => b.toString(16).padStart(2, "0")).join("");
-
-          // Atomic SQLite Transaction
-          db.transaction(() => {
-            // Deduct from sender
-            db.run("UPDATE accounts SET usdc_balance = usdc_balance - ?, nonce = nonce + 1 WHERE address = ?", [
-              amountUsdc + feeUsdc, sender
-            ]);
-
-            // Credit recipient if exists, or insert new
-            const recipientRow: any = db.query("SELECT * FROM accounts WHERE address = ?").get(recipient);
-            if (recipientRow) {
-              db.run("UPDATE accounts SET usdc_balance = usdc_balance + ? WHERE address = ?", [amountUsdc, recipient]);
-            } else {
-              db.run(`
-                INSERT INTO accounts (address, email, name, picture, sub, aud, ephemeral_public_key, zk_proof, nonce, usdc_balance, sena_balance, created_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, ?, 50000000, ?)
-              `, [
-                recipient,
-                recipientEmail || "recipient@sena.network",
-                recipientEmail ? recipientEmail.split("@")[0] : "Recipient",
-                `https://api.dicebear.com/7.x/identicon/svg?seed=${encodeURIComponent(recipient)}`,
-                "oidc-recipient",
-                "sena-mobile-wallet-v1",
-                "0x00",
-                "0x00",
-                amountUsdc,
-                Date.now()
-              ]);
-            }
-
-            // Record transaction
-            db.run(`
-              INSERT INTO transactions (id, hash, sender, sender_email, recipient, recipient_email, amount_usdc, fee_usdc, status, block_height, epk_signature, timestamp)
-              VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            `, [
-              txHash.slice(0, 16),
-              txHash,
-              sender,
-              senderEmail || senderRow.email,
-              recipient,
-              recipientEmail || "",
-              amountUsdc,
-              feeUsdc,
-              "pending",
-              currentBlockHeight,
-              epkSignatureHex || "",
-              Date.now()
-            ]);
-          })();
-
-          // Fetch updated balances
-          const senderUpdated: any = db.query("SELECT usdc_balance, nonce FROM accounts WHERE address = ?").get(sender);
-          const recipientUpdated: any = db.query("SELECT usdc_balance FROM accounts WHERE address = ?").get(recipient);
-
-          // 1. Immediately stream tx pending event over WebSockets
-          const streamPacket = {
-            type: "TX_STREAM",
-            status: "pending",
-            hash: txHash,
-            sender,
-            recipient,
-            amountUsdc,
-            feeUsdc,
-            senderBalance: senderUpdated?.usdc_balance,
-            recipientBalance: recipientUpdated?.usdc_balance,
-            timestamp: Date.now()
-          };
-
-          server.publish("wallet-stream", JSON.stringify(streamPacket));
-
-          // 2. Simulate soft-confirmation within 600ms and stream confirmation
-          setTimeout(() => {
-            currentBlockHeight += 1;
-            db.run("UPDATE transactions SET status = 'soft_confirmed', block_height = ? WHERE hash = ?", [
-              currentBlockHeight, txHash
-            ]);
-
-            const confirmedPacket = {
-              type: "TX_STREAM",
-              status: "soft_confirmed",
-              hash: txHash,
-              blockHeight: currentBlockHeight,
-              timestamp: Date.now()
-            };
-            server.publish("wallet-stream", JSON.stringify(confirmedPacket));
-          }, 600);
-
-          return Response.json(streamPacket, { headers: corsHeaders });
-        } catch (err: any) {
-          return Response.json({ error: err.message }, { status: 500, headers: corsHeaders });
-        }
-      })();
-    }
-
-    // GET /api/transactions
-    if (url.pathname === "/api/transactions" && req.method === "GET") {
-      const rows = db.query("SELECT * FROM transactions ORDER BY timestamp DESC LIMIT 50").all();
-      return Response.json(rows, { headers: corsHeaders });
-    }
-
-    return new Response("SENA Bun SQLite & WebSocket API Service", { headers: corsHeaders });
-  },
-
-  websocket: {
-    open(ws) {
-      ws.subscribe("wallet-stream");
-      console.log(`[WebSocket] Client connected (Subscribed to wallet-stream)`);
-      ws.send(JSON.stringify({
-        type: "CONNECTED",
-        message: "Connected to SENA SQLite Real-Time WebSocket Stream",
-        blockHeight: currentBlockHeight,
-        timestamp: Date.now()
-      }));
-    },
-    message(ws, message) {
-      // Echo or client ping
-      if (message === "ping") {
-        ws.send("pong");
+    if (url.pathname === "/faucet" && req.method === "POST") {
+      let body: { address?: string; asset?: number };
+      try { body = await req.json(); } catch { return json({ error: "send JSON" }, 400); }
+      const { address, asset } = body;
+      if (typeof address !== "string" || !/^0x[0-9a-fA-F]{64}$/.test(address)) return json({ error: "address must be 0x and 64 hex digits" }, 400);
+      if (typeof asset !== "number") return json({ error: "asset must be a fee asset id" }, 400);
+      const key = `${address.toLowerCase()}:${asset}`;
+      const wait = (lastDrip.get(key) ?? 0) + COOLDOWN_MS - Date.now();
+      if (wait > 0) return json({ error: `wait ${Math.ceil(wait / 1000)}s before asking for this coin again` }, 429);
+      try {
+        const hash = await serial(() => drip(address, asset));
+        lastDrip.set(key, Date.now());
+        console.log(`sent ${DRIP} of asset ${asset} to ${address}: ${hash}`);
+        return json({ hash, amount: DRIP.toString() });
+      } catch (e) {
+        return json({ error: (e as Error).message }, 502);
       }
-    },
-    close(ws) {
-      console.log(`[WebSocket] Client disconnected`);
     }
-  }
+    if (url.pathname === "/" && req.method === "GET") return json({ faucet: FAUCET, rpc: RPC });
+    return json({ error: "not found" }, 404);
+  },
 });
 
-console.log(`[SENA Server] Running Bun SQLite REST API & WebSocket Stream on http://127.0.0.1:${PORT}`);
-console.log(`[SENA Server] WebSocket endpoint: ws://127.0.0.1:${PORT}/ws`);
+console.log(`SENA faucet on http://127.0.0.1:${PORT}`);
+console.log(`  account  ${FAUCET}`);
+console.log(`  node     ${RPC}`);

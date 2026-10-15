@@ -1,663 +1,239 @@
 <script setup lang="ts">
-import { ref, onMounted, computed } from 'vue';
+import { computed, onMounted, onUnmounted, ref } from 'vue';
 import Navbar from './components/Navbar.vue';
+import SignIn from './components/SignIn.vue';
 import WalletCard from './components/WalletCard.vue';
-import FastStreamPanel from './components/FastStreamPanel.vue';
 import SendModal from './components/SendModal.vue';
 import ReceiveModal from './components/ReceiveModal.vue';
-import GoogleLoginModal from './components/GoogleLoginModal.vue';
-import LightClientInspector from './components/LightClientInspector.vue';
-import ProofVisualizer from './components/ProofVisualizer.vue';
 import ActivityList from './components/ActivityList.vue';
-import { Key } from 'lucide-vue-next';
 
-import { PRESET_GOOGLE_USERS, createKeylessAccountFromOidc } from './services/oidc';
-import { senaRpc } from './services/rpc';
-import { streamService } from './services/stream';
-import type { KeylessAccount, ChainInfo, TransactionRecord, StreamEvent } from './types';
+import * as auth from './services/auth';
+import type { KeylessAccount } from './services/auth';
+import * as rpc from './services/rpc';
+import type { ChainInfo, FeeAsset, HistoryEntry } from './services/rpc';
+import { loadSena } from './services/sena';
+import { faucetAddress, requestCoins } from './services/faucet';
+import { formatAmount } from './services/wallet';
 
-// Accounts state
-const accounts = ref<Map<string, KeylessAccount>>(new Map());
-const currentEmail = ref<string | null>(null);
+const accounts = ref<KeylessAccount[]>(auth.savedAccounts());
+const activeAddr = ref<string | null>(auth.activeAddress() ?? accounts.value[0]?.address ?? null);
+const active = computed(() => accounts.value.find((a) => a.address === activeAddr.value) ?? null);
 
-const activeAccount = computed(() => {
-  if (!currentEmail.value) return null;
-  return accounts.value.get(currentEmail.value) || null;
-});
+const chain = ref<ChainInfo | null>(null);
+const nodeError = ref<string | null>(null);
+const assets = ref<FeeAsset[]>([]);
+const balances = ref(new Map<number, bigint>());
+const entries = ref<HistoryEntry[]>([]);
+const faucet = ref<string | null>(null);
 
-const allAccountsList = computed(() => {
-  return Array.from(accounts.value.values());
-});
+const signInStep = ref<string | null>(null);
+const signInError = ref<string | null>(null);
+const addingAccount = ref(false);
+const sendAsset = ref<number | null>(null);
+const receiving = ref(false);
+const faucetBusy = ref<number | null>(null);
+const toast = ref<{ text: string; error?: boolean } | null>(null);
 
-const chainInfo = ref<ChainInfo>({
-  chainId: 'sena-devnet-1',
-  blockHeight: 1,
-  finalizedHeight: 0,
-  stateRoot: '0x605e5711d3a8e2260647eb3d4d028667a8b6748c554a51782349acfaef75cc2e',
-  challengeWindowSecs: 86400,
-  mempoolSize: 0,
-  isConnectedToLiveNode: false,
-  rpcEndpoint: 'http://127.0.0.1:8545',
-});
-
-const transactions = ref<TransactionRecord[]>([]);
-
-// Modals
-const isLoginModalOpen = ref(false);
-const isSendModalOpen = ref(false);
-const isReceiveModalOpen = ref(false);
-const toastMessage = ref<string | null>(null);
-
-function showToast(msg: string) {
-  toastMessage.value = msg;
+function say(text: string, error = false) {
+  toast.value = { text, error };
   setTimeout(() => {
-    if (toastMessage.value === msg) {
-      toastMessage.value = null;
-    }
-  }, 3800);
+    if (toast.value?.text === text) toast.value = null;
+  }, 5000);
 }
 
+function select(address: string | null) {
+  activeAddr.value = address;
+  auth.setActive(address);
+  balances.value = new Map();
+  entries.value = [];
+  refresh();
+}
+
+async function refresh() {
+  try {
+    chain.value = await rpc.chainInfo();
+    nodeError.value = null;
+    if (assets.value.length === 0) assets.value = await rpc.feeAssets();
+    const a = active.value;
+    if (a) {
+      const [acct, hist] = await Promise.all([rpc.account(a.address), rpc.history(a.address)]);
+      if (activeAddr.value === a.address) {
+        balances.value = acct.balances;
+        entries.value = hist;
+      }
+    }
+  } catch (e) {
+    chain.value = null;
+    nodeError.value = (e as Error).message;
+  }
+}
+
+async function finishRedirect() {
+  const { jwt, error } = auth.takeRedirectToken();
+  if (error) signInError.value = `Google sign-in did not complete: ${error}`;
+  if (!jwt) return;
+  try {
+    signInStep.value = 'Checking the token';
+    const account = await auth.completeSignIn(jwt, (s) => (signInStep.value = s));
+    accounts.value = auth.savedAccounts();
+    select(account.address);
+    addingAccount.value = false;
+    say(`Signed in as ${account.email}`);
+  } catch (e) {
+    signInError.value = (e as Error).message;
+  } finally {
+    signInStep.value = null;
+  }
+}
+
+function begin() {
+  signInError.value = null;
+  try {
+    auth.beginGoogleSignIn();
+  } catch (e) {
+    signInError.value = (e as Error).message;
+  }
+}
+
+function signOut(address: string) {
+  auth.forgetAccount(address);
+  accounts.value = auth.savedAccounts();
+  select(auth.activeAddress());
+}
+
+async function drip(asset: number) {
+  if (!active.value) return;
+  faucetBusy.value = asset;
+  try {
+    const r = await requestCoins(active.value.address, asset);
+    const sym = assets.value.find((a) => a.asset === asset)?.symbol;
+    say(`Faucet sent ${formatAmount(BigInt(r.amount))} ${sym}; it lands in the next block.`);
+    setTimeout(refresh, 1500);
+  } catch (e) {
+    say((e as Error).message, true);
+  } finally {
+    faucetBusy.value = null;
+  }
+}
+
+const expired = computed(() => !!active.value && auth.isExpired(active.value));
+const showSignIn = computed(() => !active.value || addingAccount.value || signInStep.value !== null);
+
+let timer: number | undefined;
 onMounted(async () => {
-  // 1. Connect to WebSocket stream service
-  streamService.connect();
-
-  // 2. Fetch all accounts from SQLite database
-  try {
-    const dbAccounts = await streamService.getAccountsFromDb();
-    if (dbAccounts.length > 0) {
-      for (const acc of dbAccounts) {
-        accounts.value.set(acc.email, acc);
-        senaRpc.registerSocialIdentifier(`@${acc.name.toLowerCase().split(' ')[0]}`, acc.address);
-      }
-      currentEmail.value = dbAccounts[0].email;
-    } else {
-      // Fallback pre-initialization
-      const bob = await createKeylessAccountFromOidc(PRESET_GOOGLE_USERS[1]);
-      bob.balances.usdc = 5_000_000;
-      accounts.value.set(bob.email, bob);
-      await streamService.saveAccountToDb(bob);
-
-      const alice = await createKeylessAccountFromOidc(PRESET_GOOGLE_USERS[0]);
-      alice.balances.usdc = 10_000_000;
-      accounts.value.set(alice.email, alice);
-      await streamService.saveAccountToDb(alice);
-
-      currentEmail.value = alice.email;
-    }
-  } catch (err) {
-    console.error('Failed to initialize accounts from SQLite', err);
-  }
-
-  // 3. Fetch initial transactions from SQLite
-  try {
-    const dbTxs = await streamService.getTransactionsFromDb();
-    if (dbTxs.length > 0) {
-      transactions.value = dbTxs;
-    }
-  } catch (err) {
-    console.warn('Failed to load initial transactions', err);
-  }
-
-  // 4. Register real-time WebSocket event listener
-  streamService.on('*', (evt: StreamEvent) => {
-    if (evt.type === 'TX_STREAM') {
-      // Update sender & recipient balances in SQLite local state
-      if (evt.sender && evt.senderBalance !== undefined) {
-        for (const [_, acc] of accounts.value) {
-          if (acc.address.toLowerCase() === evt.sender?.toLowerCase()) {
-            acc.balances.usdc = evt.senderBalance;
-            acc.nonce += 1;
-            break;
-          }
-        }
-      }
-
-      if (evt.recipient && evt.recipientBalance !== undefined) {
-        for (const [_, acc] of accounts.value) {
-          if (acc.address.toLowerCase() === evt.recipient?.toLowerCase()) {
-            acc.balances.usdc = evt.recipientBalance;
-            break;
-          }
-        }
-      }
-
-      // Handle pending stream transaction
-      if (evt.status === 'pending' && evt.hash) {
-        const existingIdx = transactions.value.findIndex(t => t.hash === evt.hash);
-        if (existingIdx === -1) {
-          transactions.value.unshift({
-            id: evt.id,
-            hash: evt.hash,
-            sender: evt.sender || '',
-            senderEmail: '',
-            recipient: evt.recipient || '',
-            amountUsdc: evt.amountUsdc || 0,
-            feeUsdc: evt.feeUsdc || 1000,
-            timestamp: evt.timestamp,
-            status: 'pending',
-            zkProofSize: 128,
-            epkSignatureHex: '',
-          });
-        }
-        showToast(`⚡ [WS] Streamed $${((evt.amountUsdc || 0) / 1_000_000).toFixed(2)} USDC! Mempool broadcast.`);
-      }
-
-      // Handle soft-confirmed stream transaction
-      if (evt.status === 'soft_confirmed' && evt.hash) {
-        const tx = transactions.value.find(t => t.hash === evt.hash);
-        if (tx) {
-          tx.status = 'soft_confirmed';
-          tx.blockHeight = evt.blockHeight;
-        }
-        if (evt.blockHeight) {
-          chainInfo.value.blockHeight = evt.blockHeight;
-        }
-        showToast(`✅ [WS] Confirmed in block #${evt.blockHeight}! (SQLite WAL committed)`);
-      }
-    } else if (evt.type === 'FAUCET_CLAIMED') {
-      if (evt.address && evt.newBalance !== undefined) {
-        for (const [_, acc] of accounts.value) {
-          if (acc.address.toLowerCase() === evt.address?.toLowerCase()) {
-            acc.balances.usdc = evt.newBalance;
-            break;
-          }
-        }
-      }
-    }
-  });
-
-  // Poll chain status
-  refreshChainInfo();
-  setInterval(refreshChainInfo, 3000);
+  await loadSena();
+  await finishRedirect();
+  faucet.value = await faucetAddress();
+  await refresh();
+  timer = window.setInterval(refresh, 2000);
 });
-
-async function refreshChainInfo() {
-  const info = await senaRpc.getChainInfo();
-  chainInfo.value = info;
-}
-
-async function handleAccountCreated(acc: KeylessAccount) {
-  accounts.value.set(acc.email, acc);
-  currentEmail.value = acc.email;
-  await streamService.saveAccountToDb(acc);
-  const handle = `@${acc.name.toLowerCase().split(' ')[0]}`;
-  senaRpc.registerSocialIdentifier(handle, acc.address);
-  showToast(`🎉 Welcome ${acc.name}! Account active & saved to SQLite.`);
-}
-
-async function handleFastLogin(profile: any) {
-  try {
-    const acc = await createKeylessAccountFromOidc(profile);
-    await handleAccountCreated(acc);
-  } catch (err) {
-    console.error('Fast login error', err);
-  }
-}
-
-function handleSwitchAccount(email: string) {
-  currentEmail.value = email;
-  const user = accounts.value.get(email);
-  if (user) {
-    showToast(`Switched account to ${user.name}`);
-  }
-}
-
-function handleDisconnect() {
-  currentEmail.value = null;
-  showToast('Wallet disconnected.');
-}
-
-async function handleClaimAirdrop() {
-  if (!activeAccount.value) return;
-  const res = await streamService.claimFaucet(activeAccount.value.address, 50_000_000);
-  if (res) {
-    activeAccount.value.balances.usdc = res.newBalance;
-  } else {
-    activeAccount.value.balances.usdc += 50_000_000;
-  }
-  showToast(`🎉 Faucet: +$50.00 USDC credited in SQLite and streamed live!`);
-}
-
-async function handleTransactionSent(tx: TransactionRecord) {
-  transactions.value.unshift(tx);
-  if (activeAccount.value) {
-    try {
-      await streamService.executeStreamingTransfer({
-        sender: activeAccount.value,
-        recipientAddress: tx.recipient,
-        amountMicroUsdc: tx.amountUsdc,
-        feeMicroUsdc: tx.feeUsdc,
-        recipientEmail: tx.recipientEmail,
-      });
-    } catch (err: any) {
-      console.warn('SQLite stream error', err);
-    }
-  }
-}
+onUnmounted(() => clearInterval(timer));
 </script>
 
 <template>
   <div class="app-root">
-    <!-- Top Navigation Bar -->
-    <Navbar 
-      :account="activeAccount" 
-      :chain-info="chainInfo"
-      :available-profiles="PRESET_GOOGLE_USERS"
-      :all-accounts="allAccountsList"
-      @open-login="isLoginModalOpen = true"
-      @switch-account="handleSwitchAccount"
-      @disconnect="handleDisconnect"
+    <Navbar
+      :chain="chain"
+      :node-error="nodeError"
+      :accounts="accounts"
+      :active="active"
+      @switch="select"
+      @add="addingAccount = true"
+      @sign-out="signOut"
     />
 
-    <!-- Main Content -->
-    <main class="main-container">
-      <div v-if="activeAccount" class="dashboard-grid">
-        <!-- Left / Primary Column -->
-        <div class="primary-column">
-          <!-- Fast WebSocket Streaming & Dual Account P2P Panel -->
-          <FastStreamPanel 
-            :accounts="allAccountsList"
-            :active-account="activeAccount"
-            @select-account="handleSwitchAccount"
-          />
-
-          <WalletCard 
-            :account="activeAccount"
-            @open-send="isSendModalOpen = true"
-            @open-receive="isReceiveModalOpen = true"
-            @airdrop="handleClaimAirdrop"
-            @verify-client="() => {}"
-          />
-
-          <!-- Mobile Light Client Proof Verifier -->
-          <LightClientInspector :account="activeAccount" />
-
-          <!-- Deep-dive ZK Proof inspector -->
-          <ProofVisualizer :account="activeAccount" />
-        </div>
-
-        <!-- Right / Activity Column -->
-        <div class="secondary-column">
-          <div class="info-banner-card">
-            <div class="info-badge">How it works</div>
-            <h5>No Seed Phrases • 100% Self-Custodial</h5>
-            <p>
-              SENA uses <b>Google OpenID Connect (OIDC)</b> and off-chain <b>BN254 Groth16 zero-knowledge proofs</b>. 
-              Users authenticate with Google, sign transactions via ephemeral session keys, and verify state in &lt; 0.2ms.
-            </p>
-          </div>
-
-          <ActivityList 
-            :transactions="transactions" 
-            :current-address="activeAccount.address"
-          />
-        </div>
+    <main class="main">
+      <div v-if="nodeError" class="alert alert-error banner">
+        {{ nodeError }}. Start it with <code>scripts/wallet-devnet.py</code> in the SENA repo.
       </div>
 
-      <!-- Logged Out Welcome View -->
-      <div v-else class="logged-out-hero">
-        <div class="hero-content">
-          <div class="hero-glow"></div>
-          <span class="hero-pill">SENA Keyless Protocol</span>
-          <h1>Web2 Simplicity.<br /><span>Zero-Knowledge Security.</span></h1>
-          <p class="hero-desc">
-            Sign in with Google. Generate a self-custodial Layer 2 address anchored to Aptos L1. 
-            Test with your own Google Cloud OAuth <b>Client ID & Secret</b>, or pick a zero-setup test identity.
-          </p>
+      <SignIn
+        v-if="showSignIn"
+        :step="signInStep"
+        :error="signInError"
+        :adding="!!active"
+        @begin="begin"
+        @cancel="addingAccount = false"
+      />
 
-          <div class="hero-buttons-row">
-            <button @click="isLoginModalOpen = true" class="btn-hero-login">
-              <svg class="google-icon" viewBox="0 0 24 24" width="20" height="20">
-                <path fill="#4285F4" d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z"/>
-                <path fill="#34A853" d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z"/>
-                <path fill="#FBBC05" d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.06H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.94l2.85-2.22.81-.63z"/>
-                <path fill="#EA4335" d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.06l3.66 2.84c.87-2.6 3.3-4.52 6.16-4.52z"/>
-              </svg>
-              <span>Create Wallet with Google</span>
-            </button>
-
-            <button @click="isLoginModalOpen = true" class="btn-hero-config">
-              <Key :size="18" />
-              <span>Configure Client & Secret</span>
-            </button>
+      <div v-else-if="active" class="grid">
+        <div class="col">
+          <div v-if="expired" class="alert alert-error">
+            This browser's key for {{ active.email }} has expired. Sign in again to send; balances still show.
+            <button class="btn mini-btn" @click="begin">Sign in again</button>
           </div>
-
-          <!-- Quick Test Identities -->
-          <div class="quick-identities-panel">
-            <span class="quick-title">Or test instantly with preset test identities:</span>
-            <div class="quick-cards-grid">
-              <div class="quick-id-card" @click="handleFastLogin(PRESET_GOOGLE_USERS[0])">
-                <img :src="PRESET_GOOGLE_USERS[0].picture" class="quick-id-img" />
-                <div class="quick-id-meta">
-                  <span class="quick-id-name">Alice Walker</span>
-                  <span class="quick-id-sub">💰 10.00 USDC funded</span>
-                </div>
-              </div>
-
-              <div class="quick-id-card" @click="handleFastLogin(PRESET_GOOGLE_USERS[1])">
-                <img :src="PRESET_GOOGLE_USERS[1].picture" class="quick-id-img" />
-                <div class="quick-id-meta">
-                  <span class="quick-id-name">Bob Martinez</span>
-                  <span class="quick-id-sub">💰 0.50 USDC funded</span>
-                </div>
-              </div>
-            </div>
+          <WalletCard
+            :account="active"
+            :assets="assets"
+            :balances="balances"
+            :faucet-busy="faucetBusy"
+            @send="(a) => (sendAsset = a)"
+            @receive="receiving = true"
+            @faucet="drip"
+          />
+          <div class="card about">
+            <div class="card-title">How this works</div>
+            <p class="secondary">
+              Your address is derived from your Google identity and a pepper from Aptos's keyless
+              service. Aptos's prover proved, in zero knowledge, that Google signed you in and
+              committed to a key that lives only in this browser; that key signs your transfers,
+              and SENA verifies the proof on every one. Every coin pays its fee in itself.
+            </p>
           </div>
+        </div>
+        <div class="col">
+          <ActivityList
+            :entries="entries"
+            :address="active.address"
+            :assets="assets"
+            :contacts="accounts"
+            :faucet="faucet"
+          />
         </div>
       </div>
     </main>
 
-    <!-- Modals -->
-    <GoogleLoginModal 
-      :is-open="isLoginModalOpen"
-      @close="isLoginModalOpen = false"
-      @account-created="handleAccountCreated"
+    <SendModal
+      v-if="active && sendAsset !== null"
+      :account="active"
+      :assets="assets"
+      :balances="balances"
+      :contacts="accounts"
+      :initial-asset="sendAsset"
+      @close="sendAsset = null"
+      @sent="refresh"
     />
+    <ReceiveModal v-if="active && receiving" :account="active" :symbols="assets.map((a) => a.symbol)" @close="receiving = false" />
 
-    <SendModal 
-      v-if="activeAccount"
-      :is-open="isSendModalOpen"
-      :account="activeAccount"
-      @close="isSendModalOpen = false"
-      @transaction-sent="handleTransactionSent"
-    />
-
-    <ReceiveModal 
-      v-if="activeAccount"
-      :is-open="isReceiveModalOpen"
-      :account="activeAccount"
-      @close="isReceiveModalOpen = false"
-    />
-
-    <!-- Toast Notification -->
-    <div v-if="toastMessage" class="toast-alert">
-      <span>{{ toastMessage }}</span>
-    </div>
+    <div v-if="toast" class="toast" :class="{ error: toast.error }">{{ toast.text }}</div>
   </div>
 </template>
 
 <style scoped>
-.app-root {
-  min-height: 100vh;
-  background-color: #070a12;
-  color: #f8fafc;
-  display: flex;
-  flex-direction: column;
-}
-
-.main-container {
-  flex: 1;
-  max-width: 1240px;
-  width: 100%;
-  margin: 0 auto;
-  padding: 32px 24px 64px 24px;
-}
-
-.dashboard-grid {
-  display: grid;
-  grid-template-columns: 1fr 400px;
-  gap: 28px;
-  align-items: start;
-}
-
-.primary-column {
-  display: flex;
-  flex-direction: column;
-  gap: 28px;
-}
-
-.secondary-column {
-  display: flex;
-  flex-direction: column;
-  gap: 24px;
-}
-
-.info-banner-card {
-  background: linear-gradient(135deg, rgba(16, 185, 129, 0.08) 0%, rgba(6, 182, 212, 0.04) 100%);
-  border: 1px solid rgba(16, 185, 129, 0.2);
-  border-radius: 20px;
-  padding: 24px;
-  position: relative;
-  overflow: hidden;
-}
-
-.info-badge {
-  display: inline-block;
-  font-size: 0.72rem;
-  font-weight: 700;
-  text-transform: uppercase;
-  color: #10b981;
-  background: rgba(16, 185, 129, 0.15);
-  padding: 4px 10px;
-  border-radius: 9999px;
-  margin-bottom: 12px;
-}
-
-.info-banner-card h5 {
-  font-size: 1.05rem;
-  font-weight: 700;
-  color: #ffffff;
-  margin: 0 0 8px 0;
-}
-
-.info-banner-card p {
-  font-size: 0.85rem;
-  line-height: 1.6;
-  color: #94a3b8;
-  margin: 0;
-}
-
-/* Logged Out Hero View */
-.logged-out-hero {
-  min-height: 70vh;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  text-align: center;
-  position: relative;
-  padding: 40px 20px;
-}
-
-.hero-content {
-  max-width: 680px;
-  position: relative;
-  z-index: 1;
-}
-
-.hero-glow {
-  position: absolute;
-  top: 50%;
-  left: 50%;
-  transform: translate(-50%, -50%);
-  width: 500px;
-  height: 500px;
-  background: radial-gradient(circle, rgba(16, 185, 129, 0.12) 0%, rgba(0, 0, 0, 0) 70%);
-  pointer-events: none;
-  z-index: -1;
-}
-
-.hero-pill {
-  display: inline-block;
-  font-size: 0.8rem;
-  font-weight: 700;
-  color: #10b981;
-  background: rgba(16, 185, 129, 0.1);
-  border: 1px solid rgba(16, 185, 129, 0.25);
-  padding: 6px 16px;
-  border-radius: 9999px;
-  margin-bottom: 20px;
-  text-transform: uppercase;
-  letter-spacing: 0.08em;
-}
-
-.hero-content h1 {
-  font-family: 'Outfit', sans-serif;
-  font-size: 3.2rem;
-  font-weight: 800;
-  color: #ffffff;
-  line-height: 1.15;
-  margin: 0 0 16px 0;
-  letter-spacing: -0.02em;
-}
-
-.hero-content h1 span {
-  background: linear-gradient(135deg, #10b981 0%, #06b6d4 100%);
-  -webkit-background-clip: text;
-  -webkit-text-fill-color: transparent;
-}
-
-.hero-desc {
-  font-size: 1.05rem;
-  line-height: 1.6;
-  color: #94a3b8;
-  margin: 0 0 32px 0;
-}
-
-.hero-buttons-row {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: 16px;
-  flex-wrap: wrap;
-  margin-bottom: 36px;
-}
-
-.btn-hero-login {
-  display: inline-flex;
-  align-items: center;
-  gap: 12px;
-  background: #ffffff;
-  color: #070a12;
-  font-family: 'Outfit', sans-serif;
-  font-size: 1rem;
-  font-weight: 700;
-  padding: 14px 28px;
+.app-root { min-height: 100vh; display: flex; flex-direction: column; }
+.main { flex: 1; width: 100%; max-width: 1240px; margin: 0 auto; padding: 24px 16px 64px; }
+.banner { margin-bottom: 20px; }
+.banner code { font-family: var(--font-mono); }
+.grid { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 420px); gap: 24px; align-items: start; }
+.col { display: flex; flex-direction: column; gap: 24px; min-width: 0; }
+.about p { font-size: 0.86rem; line-height: 1.6; }
+.mini-btn { margin-top: 8px; padding: 6px 12px; font-size: 0.8rem; }
+.toast {
+  position: fixed;
+  bottom: 24px;
+  right: 16px;
+  left: 16px;
+  margin-left: auto;
+  max-width: 420px;
+  z-index: 200;
+  background: var(--bg-elevated);
+  border: 1px solid rgba(16, 185, 129, 0.4);
+  padding: 12px 18px;
   border-radius: 14px;
-  border: none;
-  cursor: pointer;
-  box-shadow: 0 12px 36px rgba(0, 0, 0, 0.4), 0 0 40px rgba(16, 185, 129, 0.2);
-  transition: all 0.2s ease;
-}
-
-.btn-hero-login:hover {
-  transform: translateY(-2px);
-  box-shadow: 0 16px 48px rgba(0, 0, 0, 0.5), 0 0 50px rgba(16, 185, 129, 0.35);
-}
-
-.btn-hero-config {
-  display: inline-flex;
-  align-items: center;
-  gap: 10px;
-  background: rgba(255, 255, 255, 0.06);
-  border: 1px solid rgba(255, 255, 255, 0.14);
-  color: #f1f5f9;
-  font-family: 'Outfit', sans-serif;
-  font-size: 0.95rem;
-  font-weight: 600;
-  padding: 14px 24px;
-  border-radius: 14px;
-  cursor: pointer;
-  transition: all 0.2s;
-}
-
-.btn-hero-config:hover {
-  background: rgba(255, 255, 255, 0.12);
-  border-color: #10b981;
-}
-
-.quick-identities-panel {
-  background: rgba(255, 255, 255, 0.02);
-  border: 1px solid rgba(255, 255, 255, 0.07);
-  border-radius: 16px;
-  padding: 18px 24px;
-}
-
-.quick-title {
-  display: block;
-  font-size: 0.78rem;
-  color: #64748b;
-  text-transform: uppercase;
-  font-weight: 600;
-  letter-spacing: 0.05em;
-  margin-bottom: 12px;
-}
-
-.quick-cards-grid {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 12px;
-}
-
-.quick-id-card {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  background: rgba(255, 255, 255, 0.03);
-  border: 1px solid rgba(255, 255, 255, 0.08);
-  border-radius: 12px;
-  padding: 10px 14px;
-  cursor: pointer;
-  transition: all 0.2s;
-  text-align: left;
-}
-
-.quick-id-card:hover {
-  background: rgba(16, 185, 129, 0.08);
-  border-color: rgba(16, 185, 129, 0.4);
-  transform: translateY(-2px);
-}
-
-.quick-id-img {
-  width: 36px;
-  height: 36px;
-  border-radius: 50%;
-  object-fit: cover;
-  border: 2px solid #10b981;
-}
-
-.quick-id-meta {
-  display: flex;
-  flex-direction: column;
-}
-
-.quick-id-name {
   font-size: 0.88rem;
   font-weight: 600;
-  color: #f1f5f9;
+  box-shadow: 0 16px 40px rgba(0, 0, 0, 0.5);
 }
-
-.quick-id-sub {
-  font-size: 0.72rem;
-  color: #34d399;
-}
-
-.toast-alert {
-  position: fixed;
-  bottom: 32px;
-  right: 32px;
-  z-index: 1000;
-  background: #0f172a;
-  border: 1px solid rgba(16, 185, 129, 0.4);
-  color: #f1f5f9;
-  padding: 14px 22px;
-  border-radius: 14px;
-  font-weight: 600;
-  font-size: 0.9rem;
-  box-shadow: 0 16px 40px rgba(0, 0, 0, 0.5), 0 0 30px rgba(16, 185, 129, 0.2);
-  animation: slideUp 0.3s ease;
-}
-
-@keyframes slideUp {
-  from { opacity: 0; transform: translateY(16px); }
-  to { opacity: 1; transform: translateY(0); }
-}
-
-@media (max-width: 960px) {
-  .dashboard-grid {
-    grid-template-columns: 1fr;
-  }
-  .quick-cards-grid {
-    grid-template-columns: 1fr;
-  }
-}
+.toast.error { border-color: rgba(239, 68, 68, 0.5); color: #fca5a5; }
+@media (max-width: 960px) { .grid { grid-template-columns: 1fr; } }
 </style>
