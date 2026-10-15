@@ -5,7 +5,8 @@
 // node: the wallet sees them arrive like any other payment. It holds the
 // faucet's Ed25519 key, so run it only on a devnet.
 //
-//   bun run faucet        (reads FAUCET_KEY_FILE and VITE_SENA_RPC_URL from .env)
+//   bun run devnet        (starts the devnet and this faucet together), or
+//   bun run faucet        (alone; reads FAUCET_KEY_FILE and VITE_SENA_RPC_URL from .env)
 
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
@@ -21,7 +22,8 @@ const COOLDOWN_MS = 60_000;
 
 const keyFile = process.env.FAUCET_KEY_FILE;
 if (!keyFile) {
-  console.error("Set FAUCET_KEY_FILE to the faucet.json scripts/wallet-devnet.py wrote.");
+  console.error("To run the SENA devnet and its faucet together, use: bun run devnet");
+  console.error("(`bun run faucet` alone needs FAUCET_KEY_FILE, the faucet.json of a devnet already running.)");
   process.exit(1);
 }
 const { secret } = JSON.parse(readFileSync(keyFile, "utf8")) as { secret: string };
