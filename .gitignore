@@ -30,3 +30,7 @@ dist-ssr
 *.db
 *.db-shm
 *.db-wal
+
+# bun run devnet: chain data and the faucet key
+.devnet/
+bin/

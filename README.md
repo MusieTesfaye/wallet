@@ -20,39 +20,29 @@ Nothing is simulated:
 
 ## What you need
 
-- [Rust](https://rustup.rs) 1.85+ and Python 3, to build and start the SENA
-  node.
 - [Bun](https://bun.sh).
+- The `sena-node` program (step 1). No Rust needed.
 - A Google OAuth client id (step 2).
 
-Check out SENA next to this repository: `../SENA`.
+## 1. Get sena-node
 
-## 1. Start a SENA devnet
+Download it ready-built:
 
-In the SENA checkout:
+1. Open [SENA's Binaries workflow](https://github.com/MusieTesfaye/SENA/actions/workflows/binaries.yml)
+   and click the newest successful run.
+2. Under **Artifacts**, download `sena-node-windows-x64`, `sena-node-macos-arm64`
+   or `sena-node-linux-x64`. Downloading needs a GitHub login.
+3. Unzip it into a `bin` folder in this repository:
+   `bin/sena-node.exe` on Windows, `bin/sena-node` elsewhere. On macOS and
+   Linux, run `chmod +x bin/sena-node`.
 
-```sh
-cargo build --release -p sena-node
-python3 scripts/wallet-devnet.py
-```
+Each build was tested on its own OS before upload: the run started this
+wallet's devnet with it and checked a faucet payment landed on chain.
+Windows may warn that the program is unrecognised, because it isn't signed.
+Choose *More info → Run anyway*.
 
-That creates a chain with:
-- the four stablecoins;
-- Google's current signing keys;
-- the Aptos Keyless mainnet parameters;
-- a faucet account holding 1,000,000.00 of each coin.
-
-It then runs the node at `http://127.0.0.1:8545`, with browsers at
-`http://localhost:5173` allowed to call it. It prints two lines for your
-`.env`:
-
-```
-  VITE_SENA_RPC_URL=http://127.0.0.1:8545
-  FAUCET_KEY_FILE=/…/SENA/wallet-devnet/faucet.json
-```
-
-Leave it running. To pick the chain up again later, run the same command; add
-`--fresh` to start over.
+With Rust installed you can build it instead: `cargo build --release -p
+sena-node` in a SENA checkout, then copy `target/release/sena-node` into `bin`.
 
 ## 2. Create a Google OAuth client
 
@@ -66,14 +56,23 @@ If Google asks you to configure a consent screen first, choose *External*,
 fill in the required fields, and add both Google accounts you will test with
 as test users.
 
-## 3. Run the wallet and the faucet
+## 3. Run it
 
 ```sh
-cp .env.example .env    # then set VITE_GOOGLE_CLIENT_ID and FAUCET_KEY_FILE
+copy .env.example .env      # Windows (cp on macOS/Linux); then set VITE_GOOGLE_CLIENT_ID
 bun install
-bun run faucet          # terminal 1
-bun run dev             # terminal 2
+bun run devnet              # terminal 1: the SENA L2 node and the faucet
+bun run dev                 # terminal 2: the wallet
 ```
+
+`bun run devnet` creates a chain in `.devnet` with:
+- the four stablecoins;
+- Google's current signing keys;
+- the Aptos Keyless mainnet parameters;
+- a faucet account holding 1,000,000.00 of each coin.
+
+It runs the node on port 8545 and the faucet on port 3001. The chain is kept
+between runs; `bun run devnet --fresh` starts over.
 
 Open http://localhost:5173. Use `localhost`, not `127.0.0.1`: Google only
 redirects back to the origin you registered.
@@ -102,6 +101,7 @@ redirects back to the origin you registered.
 | `src/services/wallet.ts` | Quoting, building, signing and submitting a transfer |
 | `src/services/rpc.ts` | The node's JSON-RPC |
 | `server.ts` | The faucet |
+| `scripts/devnet.ts` | `bun run devnet`: creates the chain, starts the node and the faucet |
 | `scripts/e2e.ts` | The browser test (below) |
 
 ## Test
@@ -138,8 +138,8 @@ cargo run -q -p sena-wasm --example keyless_sample > target/keyless-sample.json
   spend from your account until the key expires.
 - **Google rotates its signing keys** every few weeks. The devnet accepts the
   keys Google published when the chain was created. After a rotation, new
-  sign-ins fail until you restart with `--fresh`, because adding keys to a
-  running chain needs a council vote, and no tool sends one yet.
+  sign-ins fail until you run `bun run devnet --fresh`, because adding keys to
+  a running chain needs a council vote, and no tool sends one yet.
 - **Coins come only from the faucet.** Deposits from Aptos are not credited on
   the L2 yet.
 - **Aptos's keyless services are rate limited.** For heavier use, set
