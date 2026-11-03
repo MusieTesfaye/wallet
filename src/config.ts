@@ -31,6 +31,8 @@ export const config = {
     .filter(Boolean),
   /** The SENA Snap MetaMask installs: `npm:@sena-network/snap`, or `local:http://localhost:8080` while developing it. */
   snapId: (env.VITE_SNAP_ID as string | undefined) || 'npm:@sena-network/snap',
+  /** How often balances and history refresh, in milliseconds. */
+  pollMs: Number(env.VITE_POLL_MS) || 2000,
   /** The explorer, for links to transactions (the site's /explorer). */
   explorerUrl: (env.VITE_EXPLORER_URL as string | undefined) || '',
 };

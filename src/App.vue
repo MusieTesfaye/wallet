@@ -9,6 +9,7 @@ import ActivityList from './components/ActivityList.vue';
 import IdentityCard from './components/IdentityCard.vue';
 
 import * as auth from './services/auth';
+import { config } from './config';
 import type { Account } from './services/auth';
 import * as platform from './services/platform';
 import * as snap from './services/snap';
@@ -185,7 +186,7 @@ onMounted(async () => {
   if (returned.attestation) await registerAttestation(returned.attestation);
   faucet.value = await faucetAddress();
   await refresh();
-  timer = window.setInterval(refresh, 2000);
+  timer = window.setInterval(refresh, config.pollMs);
 });
 onUnmounted(() => clearInterval(timer));
 </script>
