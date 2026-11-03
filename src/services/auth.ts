@@ -31,7 +31,20 @@ export interface KeylessAccount {
 
 const ACCOUNTS_KEY = 'sena.accounts';
 const ACTIVE_KEY = 'sena.active';
-const PENDING_KEY = 'sena.pendingSession';
+// Sign-ins started in this browser and not yet finished, by OAuth nonce. Each
+// Google redirect is matched to the session its token's nonce commits to, so
+// starting a second sign-in (another tab, a retry after an error on Google's
+// page) does not strand the first.
+const PENDING_KEY = 'sena.pendingSessions';
+const PENDING_MAX_AGE_SECS = 60 * 60;
+
+type Pending = Record<string, { session: Session; started: number }>;
+
+function pendingSessions(): Pending {
+  const now = Date.now() / 1000;
+  const all = read<Pending>(PENDING_KEY, {});
+  return Object.fromEntries(Object.entries(all).filter(([, p]) => now - p.started < PENDING_MAX_AGE_SECS));
+}
 
 function read<T>(key: string, fallback: T): T {
   try {
@@ -72,7 +85,7 @@ const redirectUri = () => window.location.origin + '/';
 export function beginGoogleSignIn() {
   if (!config.googleClientId) throw new Error('VITE_GOOGLE_CLIENT_ID is not set');
   const session = sena.newSession(Math.floor(Date.now() / 1000) + SESSION_LIFETIME_SECS);
-  write(PENDING_KEY, session);
+  write(PENDING_KEY, { ...pendingSessions(), [session.nonce]: { session, started: Date.now() / 1000 } });
   const params = new URLSearchParams({
     client_id: config.googleClientId,
     redirect_uri: redirectUri(),
@@ -115,13 +128,16 @@ export type Progress = (step: string) => void;
 /** Steps 3–5, for the token Google returned. */
 export async function completeSignIn(jwt: string, progress: Progress): Promise<KeylessAccount> {
   await sena.loadSena();
-  const session = read<Session | null>(PENDING_KEY, null);
-  if (!session) throw new Error('no sign-in was started in this browser; start again');
   const { header, claims } = sena.decodeJwt(jwt);
   if (claims.iss !== GOOGLE_ISS) throw new Error(`unexpected issuer ${claims.iss}`);
   if (claims.aud !== config.googleClientId) throw new Error('the token is for another app');
-  if (claims.nonce !== session.nonce) {
-    throw new Error("the token's nonce does not commit to this browser's ephemeral key");
+  const pending = pendingSessions();
+  const session = pending[claims.nonce]?.session;
+  if (!session) {
+    throw new Error(
+      'This Google sign-in was not started from this page, or was started over an hour ago. ' +
+        `Press Continue with Google again here, at ${window.location.origin}.`,
+    );
   }
 
   progress('Fetching your pepper from Aptos');
@@ -136,7 +152,8 @@ export async function completeSignIn(jwt: string, progress: Progress): Promise<K
   const signature = sena.assembleSignature(jwt, session, pepper, EXP_HORIZON_SECS, n, proof);
   if (sena.signatureAddress(signature) !== address) throw new Error('the signature is for another address');
 
-  localStorage.removeItem(PENDING_KEY);
+  delete pending[claims.nonce];
+  write(PENDING_KEY, pending);
   const account: KeylessAccount = {
     address,
     email: claims.email ?? '',

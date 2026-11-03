@@ -144,7 +144,7 @@ onUnmounted(() => clearInterval(timer));
 
     <main class="main">
       <div v-if="nodeError" class="alert alert-error banner">
-        {{ nodeError }}. Start it with <code>scripts/wallet-devnet.py</code> in the SENA repo.
+        {{ nodeError }}. Start it with <code>bun run devnet</code> in another terminal.
       </div>
 
       <SignIn
