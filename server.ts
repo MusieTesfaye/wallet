@@ -17,8 +17,16 @@ initSync({ module: readFileSync(fileURLToPath(new URL("./src/sena/sena_wasm_bg.w
 const PORT = Number(process.env.FAUCET_PORT ?? 3001);
 const RPC = process.env.VITE_SENA_RPC_URL ?? "http://127.0.0.1:8545";
 const ORIGINS = (process.env.WALLET_ORIGINS ?? "http://localhost:5173,http://127.0.0.1:5173").split(",");
-const DRIP = 100_000_000n; // 100.00 of a six-decimal stablecoin
-const COOLDOWN_MS = 60_000;
+const DRIP = BigInt(process.env.FAUCET_DRIP ?? 100_000_000); // default 100.00 of a six-decimal stablecoin
+const COOLDOWN_MS = Number(process.env.FAUCET_COOLDOWN_SECS ?? 60) * 1000;
+// On a public faucet, fresh addresses are free, so the per-address cooldown
+// alone stops nobody: each client IP, and the faucet as a whole, get an
+// hourly budget too.
+const PER_IP_PER_HOUR = Number(process.env.FAUCET_PER_IP_PER_HOUR ?? 0); // 0: unlimited (devnet)
+const TOTAL_PER_HOUR = Number(process.env.FAUCET_TOTAL_PER_HOUR ?? 0);
+// Behind a reverse proxy (Caddy) that sets X-Forwarded-For, the client is its
+// last entry. Never set this on a faucet clients reach directly.
+const TRUST_PROXY = process.env.FAUCET_TRUST_PROXY === "1";
 
 const keyFile = process.env.FAUCET_KEY_FILE;
 if (!keyFile) {
@@ -47,6 +55,18 @@ const serial = <T>(f: () => Promise<T>): Promise<T> => {
   return next;
 };
 const lastDrip = new Map<string, number>();
+const hourly = new Map<string, { hour: number; count: number }>();
+/** Counts a drip against `key`'s budget for this hour; false once it is spent. */
+function withinBudget(key: string, limit: number): boolean {
+  if (!limit) return true;
+  const hour = Math.floor(Date.now() / 3_600_000);
+  if (hourly.size > 10_000) for (const [k, v] of hourly) if (v.hour !== hour) hourly.delete(k);
+  const e = hourly.get(key);
+  if (!e || e.hour !== hour) { hourly.set(key, { hour, count: 1 }); return true; }
+  if (e.count >= limit) return false;
+  e.count++;
+  return true;
+}
 
 async function drip(to: string, asset: number) {
   const [quote, account, pending, info] = await Promise.all([
@@ -71,9 +91,9 @@ async function drip(to: string, asset: number) {
 
 Bun.serve({
   port: PORT,
-  async fetch(req) {
+  async fetch(req, server) {
     const origin = req.headers.get("Origin") ?? "";
-    const cors: Record<string, string> = ORIGINS.includes(origin)
+    const cors: Record<string, string> = ORIGINS.includes(origin) || (ORIGINS.includes("*") && origin)
       ? { "Access-Control-Allow-Origin": origin, "Access-Control-Allow-Methods": "POST, OPTIONS", "Access-Control-Allow-Headers": "Content-Type", Vary: "Origin" }
       : {};
     const json = (body: unknown, status = 200) => Response.json(body, { status, headers: cors });
@@ -89,6 +109,10 @@ Bun.serve({
       const key = `${address.toLowerCase()}:${asset}`;
       const wait = (lastDrip.get(key) ?? 0) + COOLDOWN_MS - Date.now();
       if (wait > 0) return json({ error: `wait ${Math.ceil(wait / 1000)}s before asking for this coin again` }, 429);
+      const forwarded = TRUST_PROXY ? req.headers.get("X-Forwarded-For")?.split(",").pop()?.trim() : undefined;
+      const ip = forwarded || server.requestIP(req)?.address || "unknown";
+      if (!withinBudget(`ip:${ip}`, PER_IP_PER_HOUR)) return json({ error: "this network has had its share of the faucet for this hour" }, 429);
+      if (!withinBudget("total", TOTAL_PER_HOUR)) return json({ error: "the faucet is busy; try again within the hour" }, 429);
       try {
         const hash = await serial(() => drip(address, asset));
         lastDrip.set(key, Date.now());

@@ -9,7 +9,9 @@ import ActivityList from './components/ActivityList.vue';
 import IdentityCard from './components/IdentityCard.vue';
 
 import * as auth from './services/auth';
-import type { KeylessAccount } from './services/auth';
+import type { Account } from './services/auth';
+import * as platform from './services/platform';
+import * as snap from './services/snap';
 import * as rpc from './services/rpc';
 import type { ChainInfo, FeeAsset, HistoryEntry } from './services/rpc';
 import { loadSena } from './services/sena';
@@ -17,7 +19,7 @@ import { faucetAddress, requestCoins } from './services/faucet';
 import * as identity from './services/identity';
 import { formatAmount } from './services/wallet';
 
-const accounts = ref<KeylessAccount[]>(auth.savedAccounts());
+const accounts = ref<Account[]>(auth.savedAccounts());
 const activeAddr = ref<string | null>(auth.activeAddress() ?? accounts.value[0]?.address ?? null);
 const active = computed(() => accounts.value.find((a) => a.address === activeAddr.value) ?? null);
 
@@ -96,8 +98,8 @@ async function registerAttestation(a: identity.SignedAttestation) {
   }
 }
 
-async function finishRedirect() {
-  const { jwt, error } = auth.takeRedirectToken();
+/** Finishes a Google sign-in with the token it returned. */
+async function finishSignIn({ jwt, error }: { jwt?: string; error?: string }) {
   if (error) signInError.value = `Google sign-in did not complete: ${error}`;
   if (!jwt) return;
   try {
@@ -114,12 +116,31 @@ async function finishRedirect() {
   }
 }
 
-function begin() {
+async function begin() {
   signInError.value = null;
   try {
-    auth.beginGoogleSignIn();
+    const r = await auth.beginGoogleSignIn();
+    if (r) await finishSignIn(r);
   } catch (e) {
     signInError.value = (e as Error).message;
+  }
+}
+
+const connectingSnap = ref(false);
+async function connectMetaMask() {
+  signInError.value = null;
+  connectingSnap.value = true;
+  try {
+    const account = await snap.connect();
+    auth.saveAccount(account);
+    accounts.value = auth.savedAccounts();
+    select(account.address);
+    addingAccount.value = false;
+    say('Connected MetaMask through the SENA Snap');
+  } catch (e) {
+    signInError.value = (e as Error).message;
+  } finally {
+    connectingSnap.value = false;
   }
 }
 
@@ -150,7 +171,15 @@ const showSignIn = computed(() => !active.value || addingAccount.value || signIn
 let timer: number | undefined;
 onMounted(async () => {
   await loadSena();
-  await finishRedirect();
+  await finishSignIn(auth.takeRedirectToken());
+  // In the extension, a flow that ended after the popup closed.
+  const stored = await platform.takeStoredFlow();
+  if (stored?.kind === 'google') await finishSignIn(auth.tokenOf(stored));
+  if (stored?.kind === 'attestation') {
+    const r = stored.url ? identity.fromFragment(platform.fragment(stored.url)) : { error: stored.error };
+    if (r.error) say(`The issuer did not link it: ${r.error}`, true);
+    if (r.attestation) await registerAttestation(r.attestation);
+  }
   const returned = identity.takeReturnedAttestation();
   if (returned.error) say(`The issuer did not link it: ${returned.error}`, true);
   if (returned.attestation) await registerAttestation(returned.attestation);
@@ -183,14 +212,16 @@ onUnmounted(() => clearInterval(timer));
         :step="signInStep"
         :error="signInError"
         :adding="!!active"
+        :connecting-snap="connectingSnap"
         @begin="begin"
+        @metamask="connectMetaMask"
         @cancel="addingAccount = false"
       />
 
       <div v-else-if="active" class="grid">
         <div class="col">
           <div v-if="expired" class="alert alert-error">
-            This browser's key for {{ active.email }} has expired. Sign in again to send; balances still show.
+            The key for {{ active.email }} has expired. Sign in again to send; balances still show.
             <button class="btn mini-btn" @click="begin">Sign in again</button>
           </div>
           <WalletCard
@@ -203,7 +234,7 @@ onUnmounted(() => clearInterval(timer));
             @faucet="drip"
           />
           <IdentityCard :key="`${active.address}:${linkedTick}`" :account="active" :busy="linking || expired" @attested="registerAttestation" />
-          <div class="card about">
+          <div v-if="active.kind !== 'snap'" class="card about">
             <div class="card-title">How this works</div>
             <p class="secondary">
               Your address is derived from your Google identity and a pepper from Aptos's keyless

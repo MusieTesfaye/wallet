@@ -1,14 +1,14 @@
 <script setup lang="ts">
 import { ArrowUpRight, ArrowDownLeft, Activity } from 'lucide-vue-next';
 import type { FeeAsset, HistoryEntry } from '../services/rpc';
-import type { KeylessAccount } from '../services/auth';
+import type { Account } from '../services/auth';
 import { formatAmount, shortAddress } from '../services/wallet';
 
 const props = defineProps<{
   entries: HistoryEntry[];
   address: string;
   assets: FeeAsset[];
-  contacts: KeylessAccount[];
+  contacts: Account[];
   faucet: string | null;
 }>();
 

@@ -220,3 +220,7 @@ select.input option { background: var(--bg-surface); }
 @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.4; } }
 @keyframes spin { to { transform: rotate(360deg); } }
 .spin { animation: spin 1s linear infinite; }
+
+/* The extension's toolbar popup: a fixed 380px wide, scrolling. */
+html.popup body { width: 380px; min-height: 580px; }
+html.popup .main { padding: 12px 10px 32px; }

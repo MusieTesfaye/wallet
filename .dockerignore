@@ -1,0 +1,6 @@
+node_modules
+dist
+.devnet
+bin
+.env
+issuer.config.json

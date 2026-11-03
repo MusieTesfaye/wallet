@@ -2,7 +2,8 @@
 
 import * as rpc from './rpc';
 import * as sena from './sena';
-import type { KeylessAccount } from './auth';
+import type { Account } from './auth';
+import { sign } from './signer';
 
 export const PRICE_SCALE = 10n ** 12n;
 
@@ -20,7 +21,7 @@ export interface Prepared {
  * chain, so a stale or wrong quote is refused rather than honoured.
  */
 export async function prepareTransfer(
-  from: KeylessAccount,
+  from: Account,
   to: string,
   asset: number,
   amount: bigint,
@@ -40,7 +41,7 @@ export async function prepareTransfer(
     maxFeePerGas: quote.suggested_max_fee_per_gas,
     tip: 0n,
   });
-  const signed = sena.signKeyless(unsigned, from.session, from.signature);
+  const signed = await sign(from, unsigned);
   const tx = JSON.parse(signed) as sena.Transaction;
   const maxFee = (BigInt(tx.gas_limit) * BigInt(tx.max_fee_per_gas) + PRICE_SCALE - 1n) / PRICE_SCALE;
   return { signed, hash: sena.transactionHash(signed), gas: tx.gas_limit, maxFee };

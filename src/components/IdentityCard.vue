@@ -1,11 +1,11 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue';
 import { AtSign, Link2, ShieldCheck, Unlink } from 'lucide-vue-next';
-import type { KeylessAccount } from '../services/auth';
+import type { Account } from '../services/auth';
 import * as identity from '../services/identity';
 import type { IssuerInfo, IssuerProvider } from '../services/identity';
 
-const props = defineProps<{ account: KeylessAccount; busy: boolean }>();
+const props = defineProps<{ account: Account; busy: boolean }>();
 const emit = defineEmits<{ (e: 'attested', a: identity.SignedAttestation): void }>();
 
 const info = ref<IssuerInfo | null>(null);
@@ -29,8 +29,12 @@ onMounted(async () => {
 
 function link(p: IssuerProvider) {
   error.value = null;
-  if (p.flow === 'redirect') identity.beginLink(p, props.account.address);
-  else {
+  if (p.flow === 'redirect') {
+    identity.beginLink(p, props.account.address).then((r) => {
+      if (r?.attestation) emit('attested', r.attestation);
+      if (r?.error) error.value = r.error;
+    }, (e) => (error.value = (e as Error).message));
+  } else {
     codeFor.value = p;
     sent.value = false;
     code.value = '';

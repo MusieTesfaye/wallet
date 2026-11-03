@@ -1,12 +1,12 @@
 <script setup lang="ts">
 import { ref } from 'vue';
 import { Copy, Check, Send, ArrowDownLeft, Droplets, Zap, Clock } from 'lucide-vue-next';
-import type { KeylessAccount } from '../services/auth';
+import type { Account } from '../services/auth';
 import type { FeeAsset } from '../services/rpc';
 import { formatAmount, shortAddress } from '../services/wallet';
 
 const props = defineProps<{
-  account: KeylessAccount;
+  account: Account;
   assets: FeeAsset[];
   balances: Map<number, bigint>;
   faucetBusy: number | null;
@@ -25,7 +25,7 @@ function copy() {
   setTimeout(() => (copied.value = false), 1500);
 }
 
-const expiry = () => new Date(props.account.session.exp_date_secs * 1000);
+const expiry = () => (props.account.kind === 'snap' ? null : new Date(props.account.session.exp_date_secs * 1000));
 </script>
 
 <template>
@@ -44,10 +44,15 @@ const expiry = () => new Date(props.account.session.exp_date_secs * 1000);
         </div>
       </div>
       <div class="badges">
-        <span class="pill pill-ok"><Zap :size="12" /> Keyless</span>
-        <span class="pill pill-wait" :title="`The ephemeral key in this browser expires ${expiry().toLocaleString()}; sign in again after that.`">
-          <Clock :size="12" /> key until {{ expiry().toLocaleDateString() }}
+        <span v-if="account.kind === 'snap'" class="pill pill-ok" title="MetaMask holds this account's key and shows every transaction before signing it">
+          <Zap :size="12" /> MetaMask
         </span>
+        <template v-else>
+          <span class="pill pill-ok"><Zap :size="12" /> Keyless</span>
+          <span class="pill pill-wait" :title="`The ephemeral key in this browser expires ${expiry()?.toLocaleString()}; sign in again after that.`">
+            <Clock :size="12" /> key until {{ expiry()?.toLocaleDateString() }}
+          </span>
+        </template>
       </div>
     </div>
 

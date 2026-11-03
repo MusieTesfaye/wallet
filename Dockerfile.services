@@ -1,0 +1,7 @@
+# The faucet (server.ts) and the attestation issuer (issuer.ts). Neither needs
+# the wallet's npm dependencies: only Bun, Node built-ins and src/sena's wasm.
+FROM oven/bun:1-slim
+WORKDIR /app
+COPY server.ts issuer.ts package.json ./
+COPY src/sena ./src/sena
+# Runs as root inside the container: the keys it reads are root's, mode 0600.

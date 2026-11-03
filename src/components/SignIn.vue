@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { config } from '../config';
+import { isExtension } from '../services/platform';
 
 defineProps<{
   /** The step a sign-in in progress is at. */
@@ -7,9 +8,10 @@ defineProps<{
   error: string | null;
   /** Whether accounts already exist (this is "add another"). */
   adding: boolean;
+  connectingSnap?: boolean;
 }>();
 
-const emit = defineEmits<{ (e: 'begin'): void; (e: 'cancel'): void }>();
+const emit = defineEmits<{ (e: 'begin'): void; (e: 'metamask'): void; (e: 'cancel'): void }>();
 const origin = window.location.origin;
 </script>
 
@@ -50,6 +52,11 @@ const origin = window.location.origin;
         </svg>
         <span>{{ adding ? 'Add another Google account' : 'Continue with Google' }}</span>
       </button>
+      <!-- MetaMask does not reach into other extensions' pages, so the Snap is offered on the web only. -->
+      <button v-if="!isExtension()" class="btn btn-metamask" :disabled="connectingSnap" @click="emit('metamask')">
+        <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path fill="#F6851B" d="M21.3 2 13.4 7.9l1.5-3.5L21.3 2zM2.7 2l7.8 6-1.4-3.6L2.7 2zm15.8 13.8-2.1 3.2 4.5 1.2 1.3-4.3-3.7-.1zm-16.7.1 1.3 4.3 4.5-1.2-2.1-3.2-3.7.1z"/><path fill="#E2761B" d="m7.4 10.5-1.2 1.9 4.5.2-.2-4.8-3.1 2.7zm9.2 0-3.1-2.8-.1 4.9 4.5-.2-1.3-1.9zM7.6 19l2.7-1.3-2.3-1.8-.4 3.1zm6.1-1.3 2.7 1.3-.4-3.1-2.3 1.8z"/></svg>
+        <span>{{ connectingSnap ? 'Waiting for MetaMask…' : 'Use MetaMask' }}</span>
+      </button>
       <button v-if="adding" class="btn cancel" @click="emit('cancel')">Back to my wallet</button>
     </template>
 
@@ -58,6 +65,7 @@ const origin = window.location.origin;
 </template>
 
 <style scoped>
+.btn-metamask { display: inline-flex; align-items: center; gap: 10px; padding: 12px 22px; border-radius: 999px; font-weight: 600; }
 .hero {
   position: relative;
   max-width: 660px;

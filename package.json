@@ -11,7 +11,10 @@
     "test:e2e": "bun scripts/e2e.ts",
     "devnet": "bun scripts/devnet.ts",
     "issuer": "bun issuer.ts",
-    "test:issuer": "bun scripts/issuer-e2e.ts"
+    "test:issuer": "bun scripts/issuer-e2e.ts",
+    "build:extension": "vue-tsc -b && vite build --mode extension && bun scripts/zip-extension.ts",
+    "build:all": "bun run build:extension && cp sena-extension.zip public/ && bun run build",
+    "test:extension": "bun scripts/extension-e2e.ts"
   },
   "dependencies": {
     "lucide-vue-next": "^1.0.0",
@@ -23,6 +26,7 @@
     "@types/qrcode": "^1.5.5",
     "@vitejs/plugin-vue": "^6.0.8",
     "@vue/tsconfig": "^0.9.1",
+    "fflate": "0.8.2",
     "playwright-core": "1.56.0",
     "typescript": "~6.0.2",
     "vite": "^8.3.0",

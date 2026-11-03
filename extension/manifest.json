@@ -1,0 +1,17 @@
+{
+  "manifest_version": 3,
+  "name": "SENA Wallet",
+  "version": "0.1.0",
+  "description": "Sign in with Google, hold stablecoins on SENA, pay an email or phone number. Fees are paid in the coin you send.",
+  "key": "__KEY__",
+  "action": { "default_popup": "index.html?popup=1", "default_title": "SENA Wallet" },
+  "background": { "service_worker": "background.js" },
+  "permissions": ["identity", "storage"],
+  "host_permissions": "__HOSTS__",
+  "content_scripts": [
+    { "matches": ["https://*/*", "http://localhost/*", "http://127.0.0.1/*"], "js": ["content.js"], "run_at": "document_start", "all_frames": false },
+    { "matches": ["https://*/*", "http://localhost/*", "http://127.0.0.1/*"], "js": ["inpage.js"], "run_at": "document_start", "world": "MAIN", "all_frames": false }
+  ],
+  "content_security_policy": { "extension_pages": "script-src 'self' 'wasm-unsafe-eval'; object-src 'self'" },
+  "icons": { "16": "icons/16.png", "32": "icons/32.png", "48": "icons/48.png", "128": "icons/128.png" }
+}

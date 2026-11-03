@@ -2,9 +2,9 @@
 import { onMounted, ref } from 'vue';
 import QRCode from 'qrcode';
 import { X, Copy, Check, QrCode } from 'lucide-vue-next';
-import type { KeylessAccount } from '../services/auth';
+import type { Account } from '../services/auth';
 
-const props = defineProps<{ account: KeylessAccount; symbols: string[] }>();
+const props = defineProps<{ account: Account; symbols: string[] }>();
 const emit = defineEmits<{ (e: 'close'): void }>();
 
 const qr = ref('');

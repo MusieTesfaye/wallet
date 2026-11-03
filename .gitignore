@@ -37,3 +37,8 @@ bin/
 
 # the issuer's providers and their secrets
 issuer.config.json
+
+# bun run build:extension
+dist-extension/
+sena-extension.zip
+public/sena-extension.zip

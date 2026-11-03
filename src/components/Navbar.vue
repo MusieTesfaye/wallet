@@ -1,14 +1,14 @@
 <script setup lang="ts">
 import { ShieldCheck, Cpu, LogOut, UserPlus } from 'lucide-vue-next';
 import type { ChainInfo } from '../services/rpc';
-import type { KeylessAccount } from '../services/auth';
+import type { Account } from '../services/auth';
 import { shortAddress } from '../services/wallet';
 
 defineProps<{
   chain: ChainInfo | null;
   nodeError: string | null;
-  accounts: KeylessAccount[];
-  active: KeylessAccount | null;
+  accounts: Account[];
+  active: Account | null;
 }>();
 
 const emit = defineEmits<{

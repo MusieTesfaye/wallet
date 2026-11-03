@@ -15,8 +15,10 @@
 import { config, EXP_HORIZON_SECS, GOOGLE_ISS, GOOGLE_JWKS_URL, SESSION_LIFETIME_SECS } from '../config';
 import * as sena from './sena';
 import type { Session } from './sena';
+import * as platform from './platform';
 
 export interface KeylessAccount {
+  kind?: 'keyless';
   address: string;
   email: string;
   name: string;
@@ -28,6 +30,18 @@ export interface KeylessAccount {
   /** The keyless signature (with the proof), as JSON. */
   signature: string;
 }
+
+/** An account whose key MetaMask holds, through the SENA Snap. */
+export interface SnapAccount {
+  kind: 'snap';
+  address: string;
+  email: string;
+  name: string;
+  picture: string;
+}
+
+export type Account = KeylessAccount | SnapAccount;
+export const isSnap = (a: Account): a is SnapAccount => a.kind === 'snap';
 
 const ACCOUNTS_KEY = 'sena.accounts';
 const ACTIVE_KEY = 'sena.active';
@@ -63,11 +77,11 @@ function write(key: string, value: unknown) {
   }
 }
 
-export const savedAccounts = (): KeylessAccount[] => read<KeylessAccount[]>(ACCOUNTS_KEY, []);
+export const savedAccounts = (): Account[] => read<Account[]>(ACCOUNTS_KEY, []);
 export const activeAddress = (): string | null => read<string | null>(ACTIVE_KEY, null);
 export const setActive = (address: string | null) => write(ACTIVE_KEY, address);
 
-export function saveAccount(a: KeylessAccount) {
+export function saveAccount(a: Account) {
   write(ACCOUNTS_KEY, [a, ...savedAccounts().filter((x) => x.address !== a.address)]);
   setActive(a.address);
 }
@@ -77,12 +91,16 @@ export function forgetAccount(address: string) {
   if (activeAddress() === address) setActive(savedAccounts()[0]?.address ?? null);
 }
 
-export const isExpired = (a: KeylessAccount) => a.session.exp_date_secs <= Date.now() / 1000;
+export const isExpired = (a: Account) => !isSnap(a) && a.session.exp_date_secs <= Date.now() / 1000;
 
-const redirectUri = () => window.location.origin + '/';
+const redirectUri = () => platform.returnUrl();
 
-/** Step 1–2: a new ephemeral key, then off to Google with its nonce. */
-export function beginGoogleSignIn() {
+/**
+ * Step 1–2: a new ephemeral key, then off to Google with its nonce. A web page
+ * leaves for Google and comes back with the token in its URL; the extension
+ * gets the token back here.
+ */
+export async function beginGoogleSignIn(): Promise<{ jwt?: string; error?: string } | void> {
   if (!config.googleClientId) throw new Error('VITE_GOOGLE_CLIENT_ID is not set');
   const session = sena.newSession(Math.floor(Date.now() / 1000) + SESSION_LIFETIME_SECS);
   write(PENDING_KEY, { ...pendingSessions(), [session.nonce]: { session, started: Date.now() / 1000 } });
@@ -94,7 +112,16 @@ export function beginGoogleSignIn() {
     nonce: session.nonce,
     prompt: 'select_account',
   });
-  window.location.assign(`https://accounts.google.com/o/oauth2/v2/auth?${params}`);
+  const url = `https://accounts.google.com/o/oauth2/v2/auth?${params}`;
+  if (!platform.isExtension()) return window.location.assign(url);
+  return tokenOf(await platform.runFlow('google', url));
+}
+
+/** The ID token (or error) a finished Google flow carries. */
+export function tokenOf(r: platform.FlowResult): { jwt?: string; error?: string } {
+  if (r.error || !r.url) return { error: r.error ?? 'the sign-in window was closed' };
+  const f = platform.fragment(r.url);
+  return { jwt: f.get('id_token') ?? undefined, error: f.get('error') ?? undefined };
 }
 
 /** The ID token Google redirected back with, if any; clears it from the URL. */
@@ -136,7 +163,7 @@ export async function completeSignIn(jwt: string, progress: Progress): Promise<K
   if (!session) {
     throw new Error(
       'This Google sign-in was not started from this page, or was started over an hour ago. ' +
-        `Press Continue with Google again here, at ${window.location.origin}.`,
+        'Press Continue with Google again here.',
     );
   }
 

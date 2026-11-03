@@ -11,7 +11,9 @@
 import { config } from '../config';
 import * as rpc from './rpc';
 import * as sena from './sena';
-import type { KeylessAccount } from './auth';
+import type { Account } from './auth';
+import { sign } from './signer';
+import * as platform from './platform';
 import { waitForBlock } from './wallet';
 
 export interface IssuerProvider {
@@ -56,10 +58,33 @@ export async function trustedIssuers(): Promise<string[]> {
 }
 
 /** Off to the provider, through the issuer; it returns here with the attestation. */
-export function beginLink(provider: IssuerProvider, account: string) {
-  const back = window.location.origin + '/';
-  const params = new URLSearchParams({ account, return: back });
-  window.location.assign(`${config.issuerUrl}/link/${provider.id}?${params}`);
+/**
+ * Off to the provider, through the issuer. A web page leaves and comes back
+ * with the attestation in its URL; the extension gets it back here.
+ */
+export async function beginLink(provider: IssuerProvider, account: string): Promise<Returned | void> {
+  const params = new URLSearchParams({ account, return: platform.returnUrl('issuer') });
+  const url = `${config.issuerUrl}/link/${provider.id}?${params}`;
+  if (!platform.isExtension()) return window.location.assign(url);
+  const r = await platform.runFlow('attestation', url);
+  return r.url ? fromFragment(platform.fragment(r.url)) : { error: r.error ?? 'the window was closed' };
+}
+
+export interface Returned {
+  attestation?: SignedAttestation;
+  error?: string;
+}
+
+/** The attestation, or the issuer's refusal, in a returned URL's fragment. */
+export function fromFragment(hash: URLSearchParams): Returned {
+  const decode = (k: string) => {
+    const b64 = hash.get(k)!.replace(/-/g, '+').replace(/_/g, '/');
+    return JSON.parse(new TextDecoder().decode(Uint8Array.from(atob(b64), (c) => c.charCodeAt(0))));
+  };
+  const out: Returned = {};
+  if (hash.has('sena_attestation')) out.attestation = decode('sena_attestation');
+  if (hash.has('sena_attestation_error')) out.error = String(decode('sena_attestation_error'));
+  return out;
 }
 
 async function post(path: string, body: object): Promise<any> {
@@ -79,21 +104,14 @@ export const checkCode = (provider: IssuerProvider, to: string, code: string, ac
   post(`/code/${provider.id}/check`, { to, code, account });
 
 /** An attestation (or the issuer's refusal) the issuer redirected back with; clears it from the URL. */
-export function takeReturnedAttestation(): { attestation?: SignedAttestation; error?: string } {
-  const hash = new URLSearchParams(window.location.hash.slice(1));
-  const decode = (k: string) => {
-    const b64 = hash.get(k)!.replace(/-/g, '+').replace(/_/g, '/');
-    return JSON.parse(new TextDecoder().decode(Uint8Array.from(atob(b64), (c) => c.charCodeAt(0))));
-  };
-  const out: { attestation?: SignedAttestation; error?: string } = {};
-  if (hash.has('sena_attestation')) out.attestation = decode('sena_attestation');
-  if (hash.has('sena_attestation_error')) out.error = String(decode('sena_attestation_error'));
+export function takeReturnedAttestation(): Returned {
+  const out = fromFragment(new URLSearchParams(window.location.hash.slice(1)));
   if (out.attestation || out.error) history.replaceState(null, '', window.location.pathname);
   return out;
 }
 
 /** Signs a transaction carrying `payload` from the account, fee in USDC; resolves once in a block. */
-async function submitFrom(account: KeylessAccount, payload: object): Promise<number> {
+async function submitFrom(account: Account, payload: object): Promise<number> {
   await sena.loadSena();
   const [quote, acct, info] = await Promise.all([rpc.gasPrice(1), rpc.account(account.address), rpc.chainInfo()]);
   const unsigned = sena.buildTransaction({
@@ -107,12 +125,12 @@ async function submitFrom(account: KeylessAccount, payload: object): Promise<num
     maxFeePerGas: quote.suggested_max_fee_per_gas,
     tip: 0n,
   });
-  const hash = await rpc.submit(sena.signKeyless(unsigned, account.session, account.signature));
+  const hash = await rpc.submit(await sign(account, unsigned));
   return waitForBlock(hash);
 }
 
 /** Submits an attestation from its account, the account's consent; resolves once in a block. */
-export function registerAttestation(account: KeylessAccount, a: SignedAttestation): Promise<number> {
+export function registerAttestation(account: Account, a: SignedAttestation): Promise<number> {
   if (a.account !== account.address) return Promise.reject(new Error('that attestation is for another account'));
   return submitFrom(account, {
     kind: 'register_attestation',
@@ -125,7 +143,7 @@ export function registerAttestation(account: KeylessAccount, a: SignedAttestatio
 }
 
 /** Revokes the issuer's attestation of an identifier to this account (Celo's revokeAttestation). */
-export async function revokeAttestation(account: KeylessAccount, l: LinkedIdentity): Promise<number> {
+export async function revokeAttestation(account: Account, l: LinkedIdentity): Promise<number> {
   const info = await rpc.chainInfo();
   await sena.loadSena();
   const issuer = l.issuer ?? (await trustedIssuers())[0];

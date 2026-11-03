@@ -1,17 +1,17 @@
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue';
 import { X, Send, ExternalLink } from 'lucide-vue-next';
-import type { KeylessAccount } from '../services/auth';
+import type { Account } from '../services/auth';
 import type { FeeAsset } from '../services/rpc';
 import * as rpc from '../services/rpc';
 import * as identity from '../services/identity';
 import { formatAmount, isAddress, parseAmount, prepareTransfer, shortAddress, waitForBlock } from '../services/wallet';
 
 const props = defineProps<{
-  account: KeylessAccount;
+  account: Account;
   assets: FeeAsset[];
   balances: Map<number, bigint>;
-  contacts: KeylessAccount[];
+  contacts: Account[];
   initialAsset: number;
 }>();
 
