@@ -22,6 +22,12 @@ function who(address?: string) {
 }
 
 const outgoing = (e: HistoryEntry) => e.transaction.sender === props.address;
+const kinds: Record<string, string> = {
+  register_attestation: 'Linked an identity',
+  revoke_attestation: 'Unlinked an identity',
+  distribute_fees: 'Distributed fees',
+  governance: 'Governance',
+};
 const time = (e: HistoryEntry) => (e.timestamp ? new Date(e.timestamp * 1000).toLocaleString() : 'queued');
 </script>
 
@@ -41,7 +47,7 @@ const time = (e: HistoryEntry) => (e.timestamp ? new Date(e.timestamp * 1000).to
             <span v-if="e.transaction.payload.kind === 'transfer'">
               {{ outgoing(e) ? 'To' : 'From' }} {{ outgoing(e) ? who(e.transaction.payload.to) : who(e.transaction.sender) }}
             </span>
-            <span v-else>{{ e.transaction.payload.kind }}</span>
+            <span v-else>{{ kinds[e.transaction.payload.kind] ?? e.transaction.payload.kind }}</span>
             <span class="amount mono" :class="outgoing(e) ? 'neg' : 'pos'" v-if="e.transaction.payload.amount">
               {{ outgoing(e) ? '−' : '+' }}{{ formatAmount(BigInt(e.transaction.payload.amount)) }}
               {{ symbol(e.transaction.payload.asset) }}

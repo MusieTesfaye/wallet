@@ -34,3 +34,6 @@ dist-ssr
 # bun run devnet: chain data and the faucet key
 .devnet/
 bin/
+
+# the issuer's providers and their secrets
+issuer.config.json

@@ -6,6 +6,7 @@ import WalletCard from './components/WalletCard.vue';
 import SendModal from './components/SendModal.vue';
 import ReceiveModal from './components/ReceiveModal.vue';
 import ActivityList from './components/ActivityList.vue';
+import IdentityCard from './components/IdentityCard.vue';
 
 import * as auth from './services/auth';
 import type { KeylessAccount } from './services/auth';
@@ -13,6 +14,7 @@ import * as rpc from './services/rpc';
 import type { ChainInfo, FeeAsset, HistoryEntry } from './services/rpc';
 import { loadSena } from './services/sena';
 import { faucetAddress, requestCoins } from './services/faucet';
+import * as identity from './services/identity';
 import { formatAmount } from './services/wallet';
 
 const accounts = ref<KeylessAccount[]>(auth.savedAccounts());
@@ -65,6 +67,32 @@ async function refresh() {
   } catch (e) {
     chain.value = null;
     nodeError.value = (e as Error).message;
+  }
+}
+
+const linking = ref(false);
+// Bumped when an identity is linked, so the card shows it.
+const linkedTick = ref(0);
+
+/** Submits an issuer's attestation from the account it names: its consent to be found. */
+async function registerAttestation(a: identity.SignedAttestation) {
+  const owner = accounts.value.find((x) => x.address === a.account);
+  if (!owner) {
+    say('That attestation is for an account not signed in here.', true);
+    return;
+  }
+  const label = a.prefix === 'mailto' || a.prefix === 'tel' ? a.plaintext : `${a.prefix}:${a.plaintext}`;
+  linking.value = true;
+  try {
+    const height = await identity.registerAttestation(owner, a);
+    identity.rememberLinked(owner.address, a.prefix, a.plaintext);
+    linkedTick.value++;
+    say(`Linked ${label} in block #${height}: people can now pay you by it.`);
+    refresh();
+  } catch (e) {
+    say(`Could not link ${label}: ${(e as Error).message}`, true);
+  } finally {
+    linking.value = false;
   }
 }
 
@@ -123,6 +151,9 @@ let timer: number | undefined;
 onMounted(async () => {
   await loadSena();
   await finishRedirect();
+  const returned = identity.takeReturnedAttestation();
+  if (returned.error) say(`The issuer did not link it: ${returned.error}`, true);
+  if (returned.attestation) await registerAttestation(returned.attestation);
   faucet.value = await faucetAddress();
   await refresh();
   timer = window.setInterval(refresh, 2000);
@@ -171,6 +202,7 @@ onUnmounted(() => clearInterval(timer));
             @receive="receiving = true"
             @faucet="drip"
           />
+          <IdentityCard :key="`${active.address}:${linkedTick}`" :account="active" :busy="linking || expired" @attested="registerAttestation" />
           <div class="card about">
             <div class="card-title">How this works</div>
             <p class="secondary">

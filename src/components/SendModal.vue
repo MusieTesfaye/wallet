@@ -4,6 +4,7 @@ import { X, Send, ExternalLink } from 'lucide-vue-next';
 import type { KeylessAccount } from '../services/auth';
 import type { FeeAsset } from '../services/rpc';
 import * as rpc from '../services/rpc';
+import * as identity from '../services/identity';
 import { formatAmount, isAddress, parseAmount, prepareTransfer, shortAddress, waitForBlock } from '../services/wallet';
 
 const props = defineProps<{
@@ -29,14 +30,43 @@ const balance = computed(() => props.balances.get(asset.value) ?? 0n);
 const amount = computed(() => parseAmount(amountText.value));
 const others = computed(() => props.contacts.filter((c) => c.address !== props.account.address));
 
+// "bob@gmail.com", "+15551234567" or "twit:bob", resolved through the issuers
+// this wallet trusts; or a plain address.
+const parsed = computed(() => identity.parseRecipient(to.value));
+const resolved = ref<identity.Resolution | null>(null);
+const resolveError = ref<string | null>(null);
+const resolving = ref(false);
+let resolveSeq = 0;
+watch(to, async () => {
+  resolved.value = null;
+  resolveError.value = null;
+  const p = parsed.value;
+  if (!p) return;
+  const seq = ++resolveSeq;
+  resolving.value = true;
+  try {
+    const r = await identity.resolve(p.prefix, p.plaintext);
+    if (seq !== resolveSeq) return;
+    resolved.value = r;
+    if (!r) resolveError.value = 'Nobody your trusted issuers know has linked that yet.';
+  } catch (e) {
+    if (seq === resolveSeq) resolveError.value = (e as Error).message;
+  } finally {
+    if (seq === resolveSeq) resolving.value = false;
+  }
+});
+const recipient = computed(() => (isAddress(to.value) ? to.value.trim() : resolved.value?.account ?? null));
+
 const formError = computed(() => {
-  if (to.value && !isAddress(to.value)) return 'An address is 0x followed by 64 hex digits.';
-  if (to.value.trim().toLowerCase() === props.account.address.toLowerCase()) return 'That is your own address.';
+  if (to.value && !parsed.value && !isAddress(to.value)) {
+    return 'Enter an address (0x and 64 hex digits), an email, a +phone number, or type:username (twit:bob, github:bob).';
+  }
+  if (recipient.value?.toLowerCase() === props.account.address.toLowerCase()) return 'That is you.';
   if (amountText.value && amount.value === null) return 'Enter an amount with at most six decimals.';
   if (amount.value !== null && amount.value > balance.value) return `You have ${formatAmount(balance.value)} ${coin.value?.symbol}.`;
   return null;
 });
-const canSend = computed(() => isAddress(to.value) && !!amount.value && amount.value > 0n && !formError.value);
+const canSend = computed(() => !!recipient.value && !!amount.value && amount.value > 0n && !formError.value);
 
 // The fee is paid in the coin being sent; the most it can come to is the gas
 // limit at the quoted maximum price. What it actually costs is shown after.
@@ -57,7 +87,7 @@ async function send() {
   error.value = null;
   try {
     stage.value = 'signing';
-    const p = await prepareTransfer(props.account, to.value.trim(), asset.value, amount.value);
+    const p = await prepareTransfer(props.account, recipient.value!, asset.value, amount.value);
     if (amount.value + p.maxFee > balance.value) {
       throw new Error(`Sending ${formatAmount(amount.value)} leaves too little for a fee of up to ${formatAmount(p.maxFee)} ${coin.value?.symbol}.`);
     }
@@ -105,8 +135,15 @@ const cls = (s: string) => {
         </div>
 
         <div class="field">
-          <label>To <span class="muted">SENA address</span></label>
-          <input v-model="to" class="input mono" placeholder="0x…" spellcheck="false" autocomplete="off" />
+          <label>To <span class="muted">address, email, +phone or type:username</span></label>
+          <input v-model="to" class="input mono" placeholder="bob@gmail.com, +1555…, twit:bob, 0x…" spellcheck="false" autocomplete="off" />
+          <div v-if="parsed" class="resolution small">
+            <span v-if="resolving" class="muted">Looking up {{ parsed.prefix }}:{{ parsed.plaintext }}…</span>
+            <span v-else-if="resolved" class="ok">
+              → {{ shortAddress(resolved.account, 8, 6) }}, attested by issuer {{ shortAddress(resolved.issuer, 4, 4) }}
+            </span>
+            <span v-else-if="resolveError" class="bad">{{ resolveError }}</span>
+          </div>
           <div v-if="others.length" class="contacts">
             <button v-for="c in others" :key="c.address" class="btn mini" :title="c.address" @click="to = c.address">
               {{ c.name.split(' ')[0] }} · {{ shortAddress(c.address, 4, 4) }}
@@ -152,6 +189,10 @@ const cls = (s: string) => {
 </template>
 
 <style scoped>
+.resolution { margin-top: 4px; }
+.small { font-size: 0.78rem; }
+.ok { color: var(--emerald-400); }
+.bad { color: #fca5a5; }
 .contacts { display: flex; gap: 6px; flex-wrap: wrap; }
 .mini { padding: 5px 9px; font-size: 0.75rem; border-radius: 9px; }
 .link { background: none; border: none; color: var(--emerald-400); cursor: pointer; font-size: 0.75rem; text-transform: none; letter-spacing: 0; }

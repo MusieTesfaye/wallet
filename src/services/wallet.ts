@@ -26,8 +26,9 @@ export async function prepareTransfer(
   amount: bigint,
 ): Promise<Prepared> {
   await sena.loadSena();
-  const [quote, acct] = await Promise.all([rpc.gasPrice(asset), rpc.account(from.address)]);
+  const [quote, acct, info] = await Promise.all([rpc.gasPrice(asset), rpc.account(from.address), rpc.chainInfo()]);
   const unsigned = sena.buildTransfer({
+    chainId: info.transaction_chain_id,
     sender: from.address,
     nonce: acct.nonce,
     to,

@@ -70,6 +70,8 @@ export const assembleSignature = (
 export const signatureAddress = (signature: string) => wasm.signatureAddress(signature);
 
 export interface TransferArgs {
+  /** The node's `transaction_chain_id`: the transaction is valid on this chain only. */
+  chainId: number;
   sender: string;
   nonce: number;
   to: string;
@@ -85,10 +87,31 @@ export interface TransferArgs {
 /** An unsigned transfer, metered to exactly the gas it uses. */
 export function buildTransfer(a: TransferArgs): string {
   return wasm.buildTransfer(
-    a.sender, BigInt(a.nonce), a.to, a.asset, a.amount.toString(), a.feeAsset,
+    BigInt(a.chainId), a.sender, BigInt(a.nonce), a.to, a.asset, a.amount.toString(), a.feeAsset,
     a.feeRate, BigInt(a.feeIntrinsicGas), a.maxFeePerGas, a.tip.toString(),
   );
 }
+
+export interface PayloadArgs extends Omit<TransferArgs, 'to' | 'asset' | 'amount'> {
+  /** The payload as the node's JSON carries it, e.g. `{kind: "register_attestation", ...}`. */
+  payload: object;
+}
+
+/** An unsigned transaction carrying any payload, metered to the gas it uses. */
+export function buildTransaction(a: PayloadArgs): string {
+  return wasm.buildTransaction(
+    BigInt(a.chainId), a.sender, BigInt(a.nonce), JSON.stringify(a.payload), a.feeAsset,
+    a.feeRate, BigInt(a.feeIntrinsicGas), a.maxFeePerGas, a.tip.toString(),
+  );
+}
+
+/**
+ * The hashed identifier for `plaintext` of type `prefix` (a Celo prefix: tel,
+ * mailto, twit, github, twitch, ...) under the network salt. Throws for a
+ * malformed type.
+ */
+export const hashIdentifier = (prefix: string, plaintext: string, salt: string) =>
+  wasm.hashIdentifier(prefix, plaintext, salt);
 
 /** Signs with the session's ephemeral key; adds keyless verification gas. */
 export const signKeyless = (tx: string, s: Session, signature: string) =>

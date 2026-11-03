@@ -196,6 +196,177 @@ export function parsePepper(response) {
 }
 
 /**
+ * Signs a transaction with a keyless session and signature, raising its gas
+ * limit by what keyless verification costs. Returns the signed JSON.
+ * @param {string} tx
+ * @param {string} session
+ * @param {string} signature
+ * @returns {string}
+ */
+export function signKeyless(tx, session, signature) {
+    let deferred5_0;
+    let deferred5_1;
+    try {
+        const ptr0 = passStringToWasm0(tx, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+        const len0 = WASM_VECTOR_LEN;
+        const ptr1 = passStringToWasm0(session, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+        const len1 = WASM_VECTOR_LEN;
+        const ptr2 = passStringToWasm0(signature, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+        const len2 = WASM_VECTOR_LEN;
+        const ret = wasm.signKeyless(ptr0, len0, ptr1, len1, ptr2, len2);
+        var ptr4 = ret[0];
+        var len4 = ret[1];
+        if (ret[3]) {
+            ptr4 = 0; len4 = 0;
+            throw takeFromExternrefTable0(ret[2]);
+        }
+        deferred5_0 = ptr4;
+        deferred5_1 = len4;
+        return getStringFromWasm0(ptr4, len4);
+    } finally {
+        wasm.__wbindgen_free(deferred5_0, deferred5_1, 1);
+    }
+}
+
+/**
+ * Signs a transaction with an Ed25519 secret key. Returns the signed JSON.
+ * @param {string} tx
+ * @param {string} secret
+ * @returns {string}
+ */
+export function signEd25519(tx, secret) {
+    let deferred4_0;
+    let deferred4_1;
+    try {
+        const ptr0 = passStringToWasm0(tx, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+        const len0 = WASM_VECTOR_LEN;
+        const ptr1 = passStringToWasm0(secret, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+        const len1 = WASM_VECTOR_LEN;
+        const ret = wasm.signEd25519(ptr0, len0, ptr1, len1);
+        var ptr3 = ret[0];
+        var len3 = ret[1];
+        if (ret[3]) {
+            ptr3 = 0; len3 = 0;
+            throw takeFromExternrefTable0(ret[2]);
+        }
+        deferred4_0 = ptr3;
+        deferred4_1 = len3;
+        return getStringFromWasm0(ptr3, len3);
+    } finally {
+        wasm.__wbindgen_free(deferred4_0, deferred4_1, 1);
+    }
+}
+
+/**
+ * The address an Ed25519 secret key controls.
+ * @param {string} secret
+ * @returns {string}
+ */
+export function ed25519Address(secret) {
+    let deferred3_0;
+    let deferred3_1;
+    try {
+        const ptr0 = passStringToWasm0(secret, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+        const len0 = WASM_VECTOR_LEN;
+        const ret = wasm.ed25519Address(ptr0, len0);
+        var ptr2 = ret[0];
+        var len2 = ret[1];
+        if (ret[3]) {
+            ptr2 = 0; len2 = 0;
+            throw takeFromExternrefTable0(ret[2]);
+        }
+        deferred3_0 = ptr2;
+        deferred3_1 = len2;
+        return getStringFromWasm0(ptr2, len2);
+    } finally {
+        wasm.__wbindgen_free(deferred3_0, deferred3_1, 1);
+    }
+}
+
+/**
+ * Signs `message` (hex) with a session's ephemeral key: proof, to an issuer,
+ * that the caller holds the key a Google sign-in committed to.
+ * @param {string} session
+ * @param {string} message_hex
+ * @returns {string}
+ */
+export function signWithSession(session, message_hex) {
+    let deferred4_0;
+    let deferred4_1;
+    try {
+        const ptr0 = passStringToWasm0(session, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+        const len0 = WASM_VECTOR_LEN;
+        const ptr1 = passStringToWasm0(message_hex, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+        const len1 = WASM_VECTOR_LEN;
+        const ret = wasm.signWithSession(ptr0, len0, ptr1, len1);
+        var ptr3 = ret[0];
+        var len3 = ret[1];
+        if (ret[3]) {
+            ptr3 = 0; len3 = 0;
+            throw takeFromExternrefTable0(ret[2]);
+        }
+        deferred4_0 = ptr3;
+        deferred4_1 = len3;
+        return getStringFromWasm0(ptr3, len3);
+    } finally {
+        wasm.__wbindgen_free(deferred4_0, deferred4_1, 1);
+    }
+}
+
+/**
+ * Whether `signature` (hex) is `public_key`'s strict Ed25519 signature on
+ * `message` (hex), as the chain checks signatures.
+ * @param {string} public_key
+ * @param {string} signature
+ * @param {string} message_hex
+ * @returns {boolean}
+ */
+export function verifyEd25519(public_key, signature, message_hex) {
+    const ptr0 = passStringToWasm0(public_key, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+    const len0 = WASM_VECTOR_LEN;
+    const ptr1 = passStringToWasm0(signature, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+    const len1 = WASM_VECTOR_LEN;
+    const ptr2 = passStringToWasm0(message_hex, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+    const len2 = WASM_VECTOR_LEN;
+    const ret = wasm.verifyEd25519(ptr0, len0, ptr1, len1, ptr2, len2);
+    if (ret[2]) {
+        throw takeFromExternrefTable0(ret[1]);
+    }
+    return ret[0] !== 0;
+}
+
+/**
+ * The OAuth nonce for an ephemeral public key, expiry and blinder, so a
+ * service can check a JWT was issued for the session it is shown.
+ * @param {string} public_key
+ * @param {bigint} exp_date_secs
+ * @param {string} blinder
+ * @returns {string}
+ */
+export function oauthNonce(public_key, exp_date_secs, blinder) {
+    let deferred4_0;
+    let deferred4_1;
+    try {
+        const ptr0 = passStringToWasm0(public_key, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+        const len0 = WASM_VECTOR_LEN;
+        const ptr1 = passStringToWasm0(blinder, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+        const len1 = WASM_VECTOR_LEN;
+        const ret = wasm.oauthNonce(ptr0, len0, exp_date_secs, ptr1, len1);
+        var ptr3 = ret[0];
+        var len3 = ret[1];
+        if (ret[3]) {
+            ptr3 = 0; len3 = 0;
+            throw takeFromExternrefTable0(ret[2]);
+        }
+        deferred4_0 = ptr3;
+        deferred4_1 = len3;
+        return getStringFromWasm0(ptr3, len3);
+    } finally {
+        wasm.__wbindgen_free(deferred4_0, deferred4_1, 1);
+    }
+}
+
+/**
  * A transaction's hash, as the node reports it.
  * @param {string} tx
  * @returns {string}
@@ -385,9 +556,11 @@ export function signatureAddress(signature) {
 }
 
 /**
- * An unsigned transfer, as JSON, metered to exactly the gas it uses.
+ * An unsigned transfer on the chain `chain_id` (the node's
+ * `transaction_chain_id`), as JSON, metered to exactly the gas it uses.
  * Amounts and prices are decimal strings; `max_fee_per_gas` and `tip` are in
  * `PRICE_SCALE`ths of the fee asset's smallest unit.
+ * @param {bigint} chain_id
  * @param {string} sender
  * @param {bigint} nonce
  * @param {string} to
@@ -400,7 +573,7 @@ export function signatureAddress(signature) {
  * @param {string} tip
  * @returns {string}
  */
-export function buildTransfer(sender, nonce, to, asset, amount_units, fee_asset, fee_rate, fee_intrinsic_gas, max_fee_per_gas, tip) {
+export function buildTransfer(chain_id, sender, nonce, to, asset, amount_units, fee_asset, fee_rate, fee_intrinsic_gas, max_fee_per_gas, tip) {
     let deferred8_0;
     let deferred8_1;
     try {
@@ -416,7 +589,7 @@ export function buildTransfer(sender, nonce, to, asset, amount_units, fee_asset,
         const len4 = WASM_VECTOR_LEN;
         const ptr5 = passStringToWasm0(tip, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
         const len5 = WASM_VECTOR_LEN;
-        const ret = wasm.buildTransfer(ptr0, len0, nonce, ptr1, len1, asset, ptr2, len2, fee_asset, ptr3, len3, fee_intrinsic_gas, ptr4, len4, ptr5, len5);
+        const ret = wasm.buildTransfer(chain_id, ptr0, len0, nonce, ptr1, len1, asset, ptr2, len2, fee_asset, ptr3, len3, fee_intrinsic_gas, ptr4, len4, ptr5, len5);
         var ptr7 = ret[0];
         var len7 = ret[1];
         if (ret[3]) {
@@ -432,24 +605,70 @@ export function buildTransfer(sender, nonce, to, asset, amount_units, fee_asset,
 }
 
 /**
- * Signs a transaction with a keyless session and signature, raising its gas
- * limit by what keyless verification costs. Returns the signed JSON.
- * @param {string} tx
- * @param {string} session
- * @param {string} signature
+ * An unsigned transaction carrying any payload, given as the node's JSON for
+ * it (`{"kind":"register_attestation",...}`); otherwise as
+ * [`build_transfer`].
+ * @param {bigint} chain_id
+ * @param {string} sender
+ * @param {bigint} nonce
+ * @param {string} payload
+ * @param {number} fee_asset
+ * @param {string} fee_rate
+ * @param {bigint} fee_intrinsic_gas
+ * @param {string} max_fee_per_gas
+ * @param {string} tip
  * @returns {string}
  */
-export function signKeyless(tx, session, signature) {
+export function buildTransaction(chain_id, sender, nonce, payload, fee_asset, fee_rate, fee_intrinsic_gas, max_fee_per_gas, tip) {
+    let deferred7_0;
+    let deferred7_1;
+    try {
+        const ptr0 = passStringToWasm0(sender, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+        const len0 = WASM_VECTOR_LEN;
+        const ptr1 = passStringToWasm0(payload, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+        const len1 = WASM_VECTOR_LEN;
+        const ptr2 = passStringToWasm0(fee_rate, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+        const len2 = WASM_VECTOR_LEN;
+        const ptr3 = passStringToWasm0(max_fee_per_gas, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+        const len3 = WASM_VECTOR_LEN;
+        const ptr4 = passStringToWasm0(tip, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+        const len4 = WASM_VECTOR_LEN;
+        const ret = wasm.buildTransaction(chain_id, ptr0, len0, nonce, ptr1, len1, fee_asset, ptr2, len2, fee_intrinsic_gas, ptr3, len3, ptr4, len4);
+        var ptr6 = ret[0];
+        var len6 = ret[1];
+        if (ret[3]) {
+            ptr6 = 0; len6 = 0;
+            throw takeFromExternrefTable0(ret[2]);
+        }
+        deferred7_0 = ptr6;
+        deferred7_1 = len6;
+        return getStringFromWasm0(ptr6, len6);
+    } finally {
+        wasm.__wbindgen_free(deferred7_0, deferred7_1, 1);
+    }
+}
+
+/**
+ * The hashed identifier for `raw` of type `identifier_type` — a Celo prefix
+ * such as `tel`, `mailto`, `twit` or `github`, or any other an issuer uses —
+ * under the network salt (the node's `network_salt`, hex). The plain text is
+ * normalised first and never leaves the caller.
+ * @param {string} identifier_type
+ * @param {string} raw
+ * @param {string} salt_hex
+ * @returns {string}
+ */
+export function hashIdentifier(identifier_type, raw, salt_hex) {
     let deferred5_0;
     let deferred5_1;
     try {
-        const ptr0 = passStringToWasm0(tx, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+        const ptr0 = passStringToWasm0(identifier_type, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
         const len0 = WASM_VECTOR_LEN;
-        const ptr1 = passStringToWasm0(session, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+        const ptr1 = passStringToWasm0(raw, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
         const len1 = WASM_VECTOR_LEN;
-        const ptr2 = passStringToWasm0(signature, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+        const ptr2 = passStringToWasm0(salt_hex, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
         const len2 = WASM_VECTOR_LEN;
-        const ret = wasm.signKeyless(ptr0, len0, ptr1, len1, ptr2, len2);
+        const ret = wasm.hashIdentifier(ptr0, len0, ptr1, len1, ptr2, len2);
         var ptr4 = ret[0];
         var len4 = ret[1];
         if (ret[3]) {
@@ -465,57 +684,37 @@ export function signKeyless(tx, session, signature) {
 }
 
 /**
- * Signs a transaction with an Ed25519 secret key. Returns the signed JSON.
- * @param {string} tx
- * @param {string} secret
+ * An issuer's signature, hex, attesting that `identifier` belongs to
+ * `account` on the chain `chain_id`.
+ * @param {string} issuer_secret
+ * @param {bigint} chain_id
+ * @param {string} identifier_hex
+ * @param {string} account
+ * @param {bigint} issued_on
  * @returns {string}
  */
-export function signEd25519(tx, secret) {
-    let deferred4_0;
-    let deferred4_1;
+export function signAttestation(issuer_secret, chain_id, identifier_hex, account, issued_on) {
+    let deferred5_0;
+    let deferred5_1;
     try {
-        const ptr0 = passStringToWasm0(tx, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+        const ptr0 = passStringToWasm0(issuer_secret, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
         const len0 = WASM_VECTOR_LEN;
-        const ptr1 = passStringToWasm0(secret, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+        const ptr1 = passStringToWasm0(identifier_hex, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
         const len1 = WASM_VECTOR_LEN;
-        const ret = wasm.signEd25519(ptr0, len0, ptr1, len1);
-        var ptr3 = ret[0];
-        var len3 = ret[1];
+        const ptr2 = passStringToWasm0(account, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+        const len2 = WASM_VECTOR_LEN;
+        const ret = wasm.signAttestation(ptr0, len0, chain_id, ptr1, len1, ptr2, len2, issued_on);
+        var ptr4 = ret[0];
+        var len4 = ret[1];
         if (ret[3]) {
-            ptr3 = 0; len3 = 0;
+            ptr4 = 0; len4 = 0;
             throw takeFromExternrefTable0(ret[2]);
         }
-        deferred4_0 = ptr3;
-        deferred4_1 = len3;
-        return getStringFromWasm0(ptr3, len3);
+        deferred5_0 = ptr4;
+        deferred5_1 = len4;
+        return getStringFromWasm0(ptr4, len4);
     } finally {
-        wasm.__wbindgen_free(deferred4_0, deferred4_1, 1);
-    }
-}
-
-/**
- * The address an Ed25519 secret key controls.
- * @param {string} secret
- * @returns {string}
- */
-export function ed25519Address(secret) {
-    let deferred3_0;
-    let deferred3_1;
-    try {
-        const ptr0 = passStringToWasm0(secret, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
-        const len0 = WASM_VECTOR_LEN;
-        const ret = wasm.ed25519Address(ptr0, len0);
-        var ptr2 = ret[0];
-        var len2 = ret[1];
-        if (ret[3]) {
-            ptr2 = 0; len2 = 0;
-            throw takeFromExternrefTable0(ret[2]);
-        }
-        deferred3_0 = ptr2;
-        deferred3_1 = len2;
-        return getStringFromWasm0(ptr2, len2);
-    } finally {
-        wasm.__wbindgen_free(deferred3_0, deferred3_1, 1);
+        wasm.__wbindgen_free(deferred5_0, deferred5_1, 1);
     }
 }
 

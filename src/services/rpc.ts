@@ -33,6 +33,16 @@ export interface ChainInfo {
   challenge_window_secs: number;
   state_root: string;
   mempool_size: number;
+  /** What transactions must carry as `chain_id`. */
+  transaction_chain_id: number;
+  /** The salt identifiers are hashed under, hex. */
+  network_salt: string;
+}
+
+export interface IssuedAttestation {
+  issuer: string;
+  account: string;
+  issued_on: number;
 }
 
 export interface FeeAsset {
@@ -71,6 +81,16 @@ export interface HistoryEntry {
 }
 
 export const chainInfo = () => rpc<ChainInfo>('sena_getChainInfo');
+
+/** What the trusted issuers attest about a hashed identifier (Celo's lookupAttestations). */
+export async function lookupAttestations(identifier: string, trustedIssuers: string[]): Promise<IssuedAttestation[]> {
+  return (
+    await rpc<{ attestations: IssuedAttestation[] }>('sena_lookupAttestations', {
+      identifier,
+      trusted_issuers: trustedIssuers,
+    })
+  ).attestations;
+}
 
 export async function feeAssets(): Promise<FeeAsset[]> {
   return (await rpc<{ assets: FeeAsset[] }>('sena_getFeeAssets')).assets;

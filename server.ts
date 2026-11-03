@@ -49,17 +49,18 @@ const serial = <T>(f: () => Promise<T>): Promise<T> => {
 const lastDrip = new Map<string, number>();
 
 async function drip(to: string, asset: number) {
-  const [quote, account, pending] = await Promise.all([
+  const [quote, account, pending, info] = await Promise.all([
     rpc("sena_gasPrice", { asset }),
     rpc("sena_getAccount", { address: FAUCET }),
     rpc("sena_getAccountTransactions", { address: FAUCET, limit: 100 }),
+    rpc("sena_getChainInfo"),
   ]);
   if (quote.result === "error") throw new Error(quote.message);
   // The account's nonce counts included transactions; queued ones are ahead.
   const queued = (pending.transactions ?? []).filter(
     (t: any) => t.confirmation.status === "pending" && t.transaction.sender === FAUCET,
   ).length;
-  const tx = buildTransfer(FAUCET, BigInt(account.nonce + queued), to, asset, DRIP.toString(), asset,
+  const tx = buildTransfer(BigInt(info.transaction_chain_id), FAUCET, BigInt(account.nonce + queued), to, asset, DRIP.toString(), asset,
     quote.rate, BigInt(quote.intrinsic_gas), quote.suggested_max_fee_per_gas, "0");
   const signed = signEd25519(tx, secret);
   const res = await fetch(RPC, { method: "POST", headers: { "Content-Type": "application/json" }, body: submitRequest(signed) });

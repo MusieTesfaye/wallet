@@ -18,6 +18,17 @@ export const config = {
   aptosApiKey: (env.VITE_APTOS_API_KEY as string | undefined) || '',
   /** The faucet server (`bun run faucet`). */
   faucetUrl: (env.VITE_FAUCET_URL as string | undefined) || 'http://127.0.0.1:3001',
+  /** The attestation issuer this wallet links identities through (issuer.ts). */
+  issuerUrl: (env.VITE_ISSUER_URL as string | undefined) || 'http://localhost:3002',
+  /**
+   * The issuers whose attestations count when resolving "bob@gmail.com" or
+   * "twit:bob" to an address, comma-separated. Empty trusts only the issuer
+   * above. As in Celo, trust is the wallet's choice, not the chain's.
+   */
+  trustedIssuers: ((env.VITE_TRUSTED_ISSUERS as string | undefined) || '')
+    .split(',')
+    .map((s) => s.trim())
+    .filter(Boolean),
 };
 
 /** Google's issuer and published signing keys. */

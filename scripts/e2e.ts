@@ -20,12 +20,14 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { chromium } from "playwright-core";
 import * as sena from "../src/sena/sena_wasm.js";
+import { startProviders } from "./test-providers";
 
 const HERE = resolve(import.meta.dir, "..");
 const SENA = resolve(process.argv[2] ?? join(HERE, "..", "SENA"));
 const NODE = join(SENA, "target", "release", "sena-node");
 const CHROME = process.env.CHROME ?? "/opt/pw-browsers/chromium-1194/chrome-linux/chrome";
-const NODE_PORT = 18_546, FAUCET_PORT = 3_999, WEB_PORT = 5_199;
+const NODE_PORT = 18_546, FAUCET_PORT = 3_999, WEB_PORT = 5_199, ISSUER_PORT = 3_998;
+const ISSUER_URL = `http://127.0.0.1:${ISSUER_PORT}`;
 const RPC = `http://127.0.0.1:${NODE_PORT}`;
 const WEB = `http://127.0.0.1:${WEB_PORT}`;
 const SHOTS = process.env.SHOTS_DIR ?? tmpdir();
@@ -87,9 +89,26 @@ try {
   fp.stderr!.on("data", (d) => (faucetOut += d));
   procs.push(fp);
   await waitFor(`http://127.0.0.1:${FAUCET_PORT}/`);
+
+  // An attestation issuer, verifying against stand-in providers.
+  const providers = await startProviders({ oidc: 3_994, oauth: 3_995, twilio: 3_996 });
+  const issuerKey = (() => {
+    const secret = Buffer.from(crypto.getRandomValues(new Uint8Array(32))).toString("hex");
+    return { secret, address: sena.ed25519Address(secret) };
+  })();
+  writeFileSync(join(dir, "issuer.json"), JSON.stringify(issuerKey));
+  writeFileSync(join(dir, "issuer.config.json"), JSON.stringify(providers.config()));
+  procs.push(spawn("bun", ["issuer.ts"], {
+    cwd: HERE, stdio: "ignore",
+    env: { ...process.env, ISSUER_CONFIG: join(dir, "issuer.config.json"), ISSUER_KEY_FILE: join(dir, "issuer.json"), ACME_SECRET: "oidc-secret",
+      ISSUER_PORT: String(ISSUER_PORT), ISSUER_PUBLIC_URL: ISSUER_URL, VITE_SENA_RPC_URL: RPC, WALLET_ORIGINS: WEB },
+  }));
+  await waitFor(`${ISSUER_URL}/`);
+
   procs.push(spawn("bunx", ["vite", "--host", "127.0.0.1", "--port", String(WEB_PORT), "--strictPort"], {
     cwd: HERE, stdio: "ignore",
-    env: { ...process.env, VITE_SENA_RPC_URL: RPC, VITE_FAUCET_URL: `http://127.0.0.1:${FAUCET_PORT}`, VITE_GOOGLE_CLIENT_ID: "e2e.apps.googleusercontent.com" },
+    env: { ...process.env, VITE_SENA_RPC_URL: RPC, VITE_FAUCET_URL: `http://127.0.0.1:${FAUCET_PORT}`, VITE_ISSUER_URL: ISSUER_URL,
+      VITE_GOOGLE_CLIENT_ID: "e2e.apps.googleusercontent.com" },
   }));
   await waitFor(WEB);
 
@@ -99,7 +118,8 @@ try {
     sample.jwk.n, sample.extra_field, JSON.stringify(sample.prover_response));
   const address = sena.keylessAddress(sample.jwt, sample.pepper);
   const account = { address, email: "sample@test.oidc.provider", name: "Aptos Sample", picture: "", jwt: sample.jwt, session, pepper: sample.pepper, signature };
-  const bob = sena.ed25519Address(Buffer.from(crypto.getRandomValues(new Uint8Array(32))).toString("hex"));
+  const bobSecret = Buffer.from(crypto.getRandomValues(new Uint8Array(32))).toString("hex");
+  const bob = sena.ed25519Address(bobSecret);
 
   const browser = await chromium.launch({ executablePath: CHROME });
   const page = await browser.newPage({ viewport: { width: 1280, height: 900 } });
@@ -166,6 +186,55 @@ try {
   check(`activity lists ${rows} entries (4 faucet payments, 4 sends)`, rows === 8);
   check("faucet payments are labelled", (await page.getByText("From Faucet").count()) === 4);
   await page.screenshot({ path: join(SHOTS, "wallet-e2e.png"), fullPage: true });
+
+  console.log("\nFind me by (SocialConnect)");
+  // The wallet links an email: out to the issuer and the provider, back with
+  // the attestation, which the account submits itself.
+  await page.locator(".card", { hasText: "Find me by" }).getByRole("button", { name: /Acme ID/ }).click();
+  await page.locator(".toast", { hasText: "Linked" }).waitFor({ timeout: 30_000 });
+  check(`linked through the issuer: "${(await page.locator(".toast").textContent())?.trim()}"`, true);
+  const info = await rpc("sena_getChainInfo");
+  const resolveOnChain = async (prefix: string, plaintext: string) =>
+    ((await rpc("sena_lookupAttestations", { identifier: sena.hashIdentifier(prefix, plaintext, info.network_salt), trusted_issuers: [issuerKey.address] })).attestations ?? [])
+      .map((a: any) => a.account).join();
+  check("alice@example.com resolves to the keyless account on chain", (await resolveOnChain("mailto", "alice@example.com")) === address);
+  check("the card lists it", (await page.locator(".linked").textContent())?.includes("Alice@Example.com") ?? false);
+
+  // Bob links his phone number (from his own wallet, here directly).
+  const post = (path: string, body: object) => fetch(`${ISSUER_URL}${path}`, { method: "POST", body: JSON.stringify(body) }).then((x) => x.json());
+  await post("/code/phone/start", { to: "+15550101234" });
+  const att = await post("/code/phone/check", { to: "+15550101234", code: "123456", account: bob });
+  {
+    const q = await rpc("sena_gasPrice", { asset: 1 });
+    const nonce = (await rpc("sena_getAccount", { address: bob })).nonce;
+    const payload = JSON.stringify({ kind: "register_attestation", identifier: att.identifier, issuer: att.issuer, account: bob, issued_on: att.issued_on, signature: att.signature });
+    const tx = sena.signEd25519(sena.buildTransaction(BigInt(info.transaction_chain_id), bob, BigInt(nonce), payload, 1, q.rate, BigInt(q.intrinsic_gas), q.suggested_max_fee_per_gas, "0"), bobSecret);
+    await fetch(RPC, { method: "POST", body: sena.submitRequest(tx) });
+    for (let i = 0; i < 40 && (await resolveOnChain("tel", "+15550101234")) !== bob; i++) await sleep(250);
+  }
+  check("Bob's phone resolves to Bob on chain", (await resolveOnChain("tel", "+15550101234")) === bob);
+
+  // Pay Bob by his phone number.
+  const bobBefore = (await rpc("sena_getAccount", { address: bob })).balances.find((b: any) => b.asset === 2)?.amount ?? "0";
+  const usdt = page.locator(".coin", { has: page.locator(".coin-symbol", { hasText: /^USDT$/ }) });
+  await usdt.getByRole("button", { name: /Send/ }).click();
+  await page.locator(".modal-card input.mono").first().fill("+1 (555) 010-1234");
+  await page.locator(".modal-card .resolution .ok").waitFor({ timeout: 10_000 });
+  check(`the wallet resolves it: "${(await page.locator(".modal-card .resolution").textContent())?.trim()}"`,
+    (await page.locator(".modal-card .resolution").textContent())?.includes(bob.slice(0, 10)) ?? false);
+  await page.locator(".modal-card input[inputmode=decimal]").fill("2");
+  await page.locator(".modal-card .btn-primary").click();
+  await page.locator(".modal-card .alert-ok").waitFor({ timeout: 30_000 });
+  await page.getByRole("button", { name: /Done/ }).click();
+  const bobAfter = (await rpc("sena_getAccount", { address: bob })).balances.find((b: any) => b.asset === 2)?.amount ?? "0";
+  check("2.00 USDT reached Bob, sent to his phone number", BigInt(bobAfter) - BigInt(bobBefore) === 2_000_000n, `${bobBefore} → ${bobAfter}`);
+
+  await usdt.getByRole("button", { name: /Send/ }).click();
+  await page.locator(".modal-card input.mono").first().fill("twit:nobody_here");
+  await page.locator(".modal-card .resolution .bad").waitFor({ timeout: 10_000 });
+  check("an identifier nobody linked does not resolve, and cannot be sent to", await page.locator(".modal-card .btn-primary").isDisabled());
+  await page.locator(".btn-close").click();
+  await page.screenshot({ path: join(SHOTS, "wallet-e2e-identity.png"), fullPage: true });
 
   console.log("\nRefusals");
   const card = page.locator(".coin").first();

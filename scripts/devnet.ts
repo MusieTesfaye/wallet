@@ -9,7 +9,9 @@
 //     publishes right now;
 //   * USDC, USDT and DAI at par and EURC at 0.925, each paying its own fees;
 //   * a faucet account holding 1,000,000.00 of each, which `server.ts` sends
-//     from with ordinary signed transfers.
+//     from with ordinary signed transfers;
+//   * an attestation issuer key; when issuer.config.json exists, the issuer
+//     (issuer.ts) runs too, verifying identifiers with the providers it names.
 //
 // The chain lives in ./.devnet and survives restarts; `bun run devnet --fresh`
 // starts a new one. Google rotates its signing keys every few weeks; after a
@@ -71,6 +73,7 @@ async function create() {
   writeFileSync(path, JSON.stringify(genesis, null, 2));
   writeFileSync(join(DIR, "faucet.json"), JSON.stringify(faucet, null, 2));
   writeFileSync(join(DIR, "sequencer.json"), JSON.stringify(sequencer, null, 2));
+  writeFileSync(join(DIR, "issuer.json"), JSON.stringify(newKey(), null, 2));
   console.log("new chain in .devnet");
   console.log(`  Google keys  ${jwks.map((j) => j.kid.slice(0, 12)).join(", ")}`);
   console.log(`  faucet       ${faucet.address}`);
@@ -82,11 +85,16 @@ if (process.argv.includes("--fresh") || !existsSync(join(CHAIN, "genesis.json"))
   console.log("resuming the chain in .devnet (bun run devnet --fresh starts a new one)");
 }
 
+// Chains created before the issuer existed get its key now.
+if (!existsSync(join(DIR, "issuer.json"))) writeFileSync(join(DIR, "issuer.json"), JSON.stringify(newKey(), null, 2));
+
 const FAUCET_PORT = Number(process.env.FAUCET_PORT ?? 3001);
+const ISSUER_PORT = Number(process.env.ISSUER_PORT ?? 3002);
+const ISSUER_CONFIG = process.env.ISSUER_CONFIG ?? join(HERE, "issuer.config.json");
 const rpc = `http://127.0.0.1:${RPC_PORT}`;
 const answers = (url: string) =>
   fetch(url, { method: "POST", body: '{"method":"sena_getChainInfo"}', signal: AbortSignal.timeout(1000) }).then(() => true, () => false);
-for (const [port, what] of [[RPC_PORT, "SENA node"], [FAUCET_PORT, "faucet"]] as const) {
+for (const [port, what] of [[RPC_PORT, "SENA node"], [FAUCET_PORT, "faucet"], [ISSUER_PORT, "issuer"]] as const) {
   if (await answers(`http://127.0.0.1:${port}`)) {
     console.error(`Something is already listening on port ${port}, where the ${what} goes.`);
     console.error("Stop it (an earlier `bun run devnet`?) and try again.");
@@ -130,6 +138,17 @@ const faucet = spawn(process.execPath, [join(HERE, "server.ts")], {
   env: { ...process.env, FAUCET_KEY_FILE: join(DIR, "faucet.json"), VITE_SENA_RPC_URL: rpc, FAUCET_PORT: String(FAUCET_PORT), WALLET_ORIGINS: ORIGINS.join(",") },
 });
 children.push(faucet);
+
+if (existsSync(ISSUER_CONFIG)) {
+  const issuer = spawn(process.execPath, [join(HERE, "issuer.ts")], {
+    stdio: "inherit",
+    env: { ...process.env, ISSUER_CONFIG, ISSUER_KEY_FILE: join(DIR, "issuer.json"), VITE_SENA_RPC_URL: rpc,
+      ISSUER_PORT: String(ISSUER_PORT), WALLET_ORIGINS: ORIGINS.join(",") },
+  });
+  children.push(issuer);
+} else {
+  console.log("No issuer.config.json, so no attestation issuer: copy issuer.config.example.json to link emails, phones and usernames.");
+}
 
 console.log("\nDevnet running. In another terminal: bun run dev, then open http://localhost:5173");
 console.log("Ctrl+C stops it; the chain is kept for next time.\n");

@@ -1,0 +1,88 @@
+{
+  "_comment": "Copy to issuer.config.json. Each provider verifies one kind of identifier; keep only those you have credentials for. Values written \"env:NAME\" are read from the environment (.env), so secrets stay out of this file. Every redirect provider needs <ISSUER_PUBLIC_URL>/callback/<id> (default http://localhost:3002/callback/<id>) registered as a redirect URI.",
+  "providers": [
+    {
+      "id": "google",
+      "label": "Google email",
+      "type": "oidc",
+      "issuer": "https://accounts.google.com",
+      "client_id": "env:GOOGLE_ISSUER_CLIENT_ID",
+      "client_secret": "env:GOOGLE_ISSUER_CLIENT_SECRET",
+      "scopes": "openid email",
+      "identifier": { "prefix": "mailto", "claim": "email", "require": "email_verified" }
+    },
+    {
+      "id": "apple",
+      "label": "Apple email",
+      "type": "oidc",
+      "issuer": "https://appleid.apple.com",
+      "client_id": "env:APPLE_SERVICES_ID",
+      "client_secret_jwt": {
+        "team_id": "env:APPLE_TEAM_ID",
+        "key_id": "env:APPLE_KEY_ID",
+        "private_key": "env:APPLE_PRIVATE_KEY"
+      },
+      "scopes": "openid email",
+      "authorize_params": { "response_mode": "form_post" },
+      "identifier": { "prefix": "mailto", "claim": "email", "require": "email_verified" }
+    },
+    {
+      "id": "twitch",
+      "label": "Twitch",
+      "type": "oidc",
+      "issuer": "https://id.twitch.tv/oauth2",
+      "client_id": "env:TWITCH_CLIENT_ID",
+      "client_secret": "env:TWITCH_CLIENT_SECRET",
+      "scopes": "openid",
+      "authorize_params": { "claims": "{\"id_token\":{\"preferred_username\":null}}" },
+      "identifier": { "prefix": "twitch", "claim": "preferred_username" }
+    },
+    {
+      "id": "github",
+      "label": "GitHub",
+      "type": "oauth2",
+      "authorize_url": "https://github.com/login/oauth/authorize",
+      "token_url": "https://github.com/login/oauth/access_token",
+      "userinfo_url": "https://api.github.com/user",
+      "client_id": "env:GITHUB_CLIENT_ID",
+      "client_secret": "env:GITHUB_CLIENT_SECRET",
+      "scopes": "read:user",
+      "identifier": { "prefix": "github", "claim": "login" }
+    },
+    {
+      "id": "discord",
+      "label": "Discord",
+      "type": "oauth2",
+      "authorize_url": "https://discord.com/oauth2/authorize",
+      "token_url": "https://discord.com/api/oauth2/token",
+      "userinfo_url": "https://discord.com/api/users/@me",
+      "client_id": "env:DISCORD_CLIENT_ID",
+      "client_secret": "env:DISCORD_CLIENT_SECRET",
+      "scopes": "identify",
+      "identifier": { "prefix": "discord", "claim": "username" }
+    },
+    {
+      "id": "x",
+      "label": "X (Twitter)",
+      "type": "oauth2",
+      "authorize_url": "https://x.com/i/oauth2/authorize",
+      "token_url": "https://api.x.com/2/oauth2/token",
+      "userinfo_url": "https://api.x.com/2/users/me",
+      "client_id": "env:X_CLIENT_ID",
+      "client_secret": "env:X_CLIENT_SECRET",
+      "token_auth": "basic",
+      "scopes": "users.read tweet.read",
+      "identifier": { "prefix": "twit", "claim": "data.username" }
+    },
+    {
+      "id": "phone",
+      "label": "Phone (SMS)",
+      "type": "twilio_verify",
+      "account_sid": "env:TWILIO_ACCOUNT_SID",
+      "auth_token": "env:TWILIO_AUTH_TOKEN",
+      "service_sid": "env:TWILIO_VERIFY_SERVICE_SID",
+      "channel": "sms",
+      "prefix": "tel"
+    }
+  ]
+}

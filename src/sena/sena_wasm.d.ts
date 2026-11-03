@@ -19,6 +19,34 @@ export function pepperRequest(jwt: string, session: string): string;
  */
 export function parsePepper(response: string): string;
 /**
+ * Signs a transaction with a keyless session and signature, raising its gas
+ * limit by what keyless verification costs. Returns the signed JSON.
+ */
+export function signKeyless(tx: string, session: string, signature: string): string;
+/**
+ * Signs a transaction with an Ed25519 secret key. Returns the signed JSON.
+ */
+export function signEd25519(tx: string, secret: string): string;
+/**
+ * The address an Ed25519 secret key controls.
+ */
+export function ed25519Address(secret: string): string;
+/**
+ * Signs `message` (hex) with a session's ephemeral key: proof, to an issuer,
+ * that the caller holds the key a Google sign-in committed to.
+ */
+export function signWithSession(session: string, message_hex: string): string;
+/**
+ * Whether `signature` (hex) is `public_key`'s strict Ed25519 signature on
+ * `message` (hex), as the chain checks signatures.
+ */
+export function verifyEd25519(public_key: string, signature: string, message_hex: string): boolean;
+/**
+ * The OAuth nonce for an ephemeral public key, expiry and blinder, so a
+ * service can check a JWT was issued for the session it is shown.
+ */
+export function oauthNonce(public_key: string, exp_date_secs: bigint, blinder: string): string;
+/**
  * A transaction's hash, as the node reports it.
  */
 export function transactionHash(tx: string): string;
@@ -47,43 +75,55 @@ export function assembleSignature(jwt: string, session: string, pepper: string, 
  */
 export function signatureAddress(signature: string): string;
 /**
- * An unsigned transfer, as JSON, metered to exactly the gas it uses.
+ * An unsigned transfer on the chain `chain_id` (the node's
+ * `transaction_chain_id`), as JSON, metered to exactly the gas it uses.
  * Amounts and prices are decimal strings; `max_fee_per_gas` and `tip` are in
  * `PRICE_SCALE`ths of the fee asset's smallest unit.
  */
-export function buildTransfer(sender: string, nonce: bigint, to: string, asset: number, amount_units: string, fee_asset: number, fee_rate: string, fee_intrinsic_gas: bigint, max_fee_per_gas: string, tip: string): string;
+export function buildTransfer(chain_id: bigint, sender: string, nonce: bigint, to: string, asset: number, amount_units: string, fee_asset: number, fee_rate: string, fee_intrinsic_gas: bigint, max_fee_per_gas: string, tip: string): string;
 /**
- * Signs a transaction with a keyless session and signature, raising its gas
- * limit by what keyless verification costs. Returns the signed JSON.
+ * An unsigned transaction carrying any payload, given as the node's JSON for
+ * it (`{"kind":"register_attestation",...}`); otherwise as
+ * [`build_transfer`].
  */
-export function signKeyless(tx: string, session: string, signature: string): string;
+export function buildTransaction(chain_id: bigint, sender: string, nonce: bigint, payload: string, fee_asset: number, fee_rate: string, fee_intrinsic_gas: bigint, max_fee_per_gas: string, tip: string): string;
 /**
- * Signs a transaction with an Ed25519 secret key. Returns the signed JSON.
+ * The hashed identifier for `raw` of type `identifier_type` — a Celo prefix
+ * such as `tel`, `mailto`, `twit` or `github`, or any other an issuer uses —
+ * under the network salt (the node's `network_salt`, hex). The plain text is
+ * normalised first and never leaves the caller.
  */
-export function signEd25519(tx: string, secret: string): string;
+export function hashIdentifier(identifier_type: string, raw: string, salt_hex: string): string;
 /**
- * The address an Ed25519 secret key controls.
+ * An issuer's signature, hex, attesting that `identifier` belongs to
+ * `account` on the chain `chain_id`.
  */
-export function ed25519Address(secret: string): string;
+export function signAttestation(issuer_secret: string, chain_id: bigint, identifier_hex: string, account: string, issued_on: bigint): string;
 
 export type InitInput = RequestInfo | URL | Response | BufferSource | WebAssembly.Module;
 
 export interface InitOutput {
   readonly memory: WebAssembly.Memory;
   readonly assembleSignature: (a: number, b: number, c: number, d: number, e: number, f: number, g: bigint, h: number, i: number, j: number, k: number, l: number, m: number) => [number, number, number, number];
-  readonly buildTransfer: (a: number, b: number, c: bigint, d: number, e: number, f: number, g: number, h: number, i: number, j: number, k: number, l: bigint, m: number, n: number, o: number, p: number) => [number, number, number, number];
+  readonly buildTransaction: (a: bigint, b: number, c: number, d: bigint, e: number, f: number, g: number, h: number, i: number, j: bigint, k: number, l: number, m: number, n: number) => [number, number, number, number];
+  readonly buildTransfer: (a: bigint, b: number, c: number, d: bigint, e: number, f: number, g: number, h: number, i: number, j: number, k: number, l: number, m: bigint, n: number, o: number, p: number, q: number) => [number, number, number, number];
   readonly decodeJwt: (a: number, b: number) => [number, number, number, number];
   readonly ed25519Address: (a: number, b: number) => [number, number, number, number];
+  readonly hashIdentifier: (a: number, b: number, c: number, d: number, e: number, f: number) => [number, number, number, number];
   readonly keylessAddress: (a: number, b: number, c: number, d: number) => [number, number, number, number];
   readonly newSession: (a: bigint, b: number, c: number) => [number, number, number, number];
+  readonly oauthNonce: (a: number, b: number, c: bigint, d: number, e: number) => [number, number, number, number];
   readonly parsePepper: (a: number, b: number) => [number, number, number, number];
   readonly pepperRequest: (a: number, b: number, c: number, d: number) => [number, number, number, number];
   readonly proverRequest: (a: number, b: number, c: number, d: number, e: number, f: number, g: bigint, h: number, i: number) => [number, number, number, number];
+  readonly signAttestation: (a: number, b: number, c: bigint, d: number, e: number, f: number, g: number, h: bigint) => [number, number, number, number];
   readonly signEd25519: (a: number, b: number, c: number, d: number) => [number, number, number, number];
   readonly signKeyless: (a: number, b: number, c: number, d: number, e: number, f: number) => [number, number, number, number];
+  readonly signWithSession: (a: number, b: number, c: number, d: number) => [number, number, number, number];
   readonly signatureAddress: (a: number, b: number) => [number, number, number, number];
   readonly submitRequest: (a: number, b: number) => [number, number, number, number];
   readonly transactionHash: (a: number, b: number) => [number, number, number, number];
+  readonly verifyEd25519: (a: number, b: number, c: number, d: number, e: number, f: number) => [number, number, number];
   readonly __wbindgen_export_0: WebAssembly.Table;
   readonly __wbindgen_malloc: (a: number, b: number) => number;
   readonly __externref_table_dealloc: (a: number) => void;
