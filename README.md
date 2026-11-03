@@ -138,6 +138,36 @@ the wallet refuses to pay it.
 **Unlinking.** **Identities → Unlink** revokes the attestation on chain. The
 issuer can revoke it too.
 
+## 5b. A real testnet on this computer, over HTTPS
+
+`bun run devnet` is a chain only this computer knows about. `bun run testnet`
+runs a full SENA testnet that **settles on Aptos testnet**: every block is
+posted to Aptos, and a watcher re-checks it. It runs on Windows, macOS or
+Linux with just Bun and `sena-node`, with no Docker or WSL.
+
+It needs `git` ([git-scm.com](https://git-scm.com/downloads)), because the
+Aptos CLI fetches the Aptos framework with it. The script downloads the Aptos
+CLI itself.
+
+```sh
+bun run testnet --host sena.<your-tailnet>.ts.net
+```
+
+1. It creates two Aptos accounts and waits. Fund them with testnet APT at the
+   [Aptos faucet](https://aptos.dev/network/faucet): about 4 APT for the
+   proposer and 0.3 APT for the challenger.
+2. It publishes SENA's contracts to Aptos and builds the wallet for your
+   address. Then it runs the node, relayer, watcher, Google key sync, faucet
+   and issuer behind `http://127.0.0.1:8088`: the wallet at `/`, the services
+   at `/rpc`, `/faucet` and `/issuer`.
+3. For HTTPS, in another terminal: `tailscale funnel --bg 8088`. Then open
+   `https://sena.<your-tailnet>.ts.net/`.
+
+Add that address to your Google OAuth client, as an origin and as a redirect
+URI (with `/`). Everything lives in `.testnet/`; run the command again to
+resume, and back the folder up. Keep the computer awake: a block more than
+an hour old can no longer be posted to Aptos.
+
 ## 6. The browser extension
 
 The same wallet, as an extension for Chrome, Edge and Brave:

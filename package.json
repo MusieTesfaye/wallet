@@ -14,7 +14,8 @@
     "test:issuer": "bun scripts/issuer-e2e.ts",
     "build:extension": "vue-tsc -b && vite build --mode extension && bun scripts/zip-extension.ts",
     "build:all": "bun run build:extension && cp sena-extension.zip public/ && bun run build",
-    "test:extension": "bun scripts/extension-e2e.ts"
+    "test:extension": "bun scripts/extension-e2e.ts",
+    "testnet": "bun scripts/testnet.ts"
   },
   "dependencies": {
     "lucide-vue-next": "^1.0.0",

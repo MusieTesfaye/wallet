@@ -91,6 +91,8 @@ async function drip(to: string, asset: number) {
 
 Bun.serve({
   port: PORT,
+  // 127.0.0.1 behind a proxy on this machine (bun run testnet); all interfaces otherwise.
+  hostname: process.env.FAUCET_HOST ?? "0.0.0.0",
   async fetch(req, server) {
     const origin = req.headers.get("Origin") ?? "";
     const cors: Record<string, string> = ORIGINS.includes(origin) || (ORIGINS.includes("*") && origin)

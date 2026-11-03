@@ -373,6 +373,8 @@ const fragment = (back: string, key: string, value: unknown) =>
 
 Bun.serve({
   port: PORT,
+  // 127.0.0.1 behind a proxy on this machine (bun run testnet); all interfaces otherwise.
+  hostname: process.env.ISSUER_HOST ?? "0.0.0.0",
   async fetch(req, server) {
     const url = new URL(req.url);
     const origin = req.headers.get("Origin") ?? "";

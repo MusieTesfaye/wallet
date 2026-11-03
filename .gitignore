@@ -42,3 +42,6 @@ issuer.config.json
 dist-extension/
 sena-extension.zip
 public/sena-extension.zip
+
+# bun run testnet: the chain, its keys and the Aptos accounts
+.testnet/
