@@ -1,0 +1,60 @@
+{
+  "name": "@sena-network/snap",
+  "version": "0.1.0",
+  "description": "SENA accounts in MetaMask: an Ed25519 key from your recovery phrase, every transaction shown before it is signed.",
+  "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/MusieTesfaye/wallet.git"
+  },
+  "main": "./dist/bundle.js",
+  "files": [
+    "dist/",
+    "images/",
+    "snap.manifest.json"
+  ],
+  "scripts": {
+    "prebuild": "node scripts/embed-wasm.cjs",
+    "build": "mm-snap build",
+    "serve": "mm-snap serve",
+    "pretest": "npm run build",
+    "test": "jest"
+  },
+  "dependencies": {
+    "@metamask/key-tree": "^10.1.1",
+    "@metamask/snaps-sdk": "^12.1.0"
+  },
+  "devDependencies": {
+    "@metamask/snaps-cli": "^8.4.1",
+    "@metamask/snaps-jest": "^10.2.2",
+    "@swc/core": "^1.16.21",
+    "@swc/jest": "^0.2.39",
+    "@types/jest": "^30.0.0",
+    "jest": "^30.5.2",
+    "typescript": "^7.0.2"
+  },
+  "jest": {
+    "preset": "@metamask/snaps-jest",
+    "testTimeout": 60000,
+    "transform": {
+      "^.+\\.(t|j)sx?$": [
+        "@swc/jest",
+        {
+          "jsc": {
+            "parser": {
+              "syntax": "typescript",
+              "tsx": true
+            },
+            "target": "es2022"
+          },
+          "module": {
+            "type": "commonjs"
+          }
+        }
+      ]
+    },
+    "transformIgnorePatterns": [
+      "/node_modules/(?!(@metamask|@noble|@scure|@ethereumjs|uuid|nanoid|immer)/)"
+    ]
+  }
+}
