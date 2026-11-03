@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue';
-import { AtSign, Link2, ShieldCheck } from 'lucide-vue-next';
+import { AtSign, Link2, ShieldCheck, Unlink } from 'lucide-vue-next';
 import type { KeylessAccount } from '../services/auth';
 import * as identity from '../services/identity';
 import type { IssuerInfo, IssuerProvider } from '../services/identity';
@@ -10,7 +10,10 @@ const emit = defineEmits<{ (e: 'attested', a: identity.SignedAttestation): void 
 
 const info = ref<IssuerInfo | null>(null);
 const loaded = ref(false);
-const linked = computed(() => identity.linkedIdentities(props.account.address));
+// Bumped after an unlink, since the list is read from storage.
+const tick = ref(0);
+const linked = computed(() => (tick.value, identity.linkedIdentities(props.account.address)));
+const unlinking = ref<string | null>(null);
 // Code flows (SMS): which provider is open, the number and the code.
 const codeFor = ref<IssuerProvider | null>(null);
 const to = ref('');
@@ -63,6 +66,20 @@ async function verify() {
   }
 }
 
+async function unlink(l: identity.LinkedIdentity) {
+  error.value = null;
+  unlinking.value = l.prefix + l.plaintext;
+  try {
+    await identity.revokeAttestation(props.account, l);
+    identity.forgetLinked(props.account.address, l);
+    tick.value++;
+  } catch (e) {
+    error.value = `Could not unlink: ${(e as Error).message}`;
+  } finally {
+    unlinking.value = null;
+  }
+}
+
 const shown = (prefix: string, plaintext: string) =>
   prefix === 'mailto' || prefix === 'tel' ? plaintext : `${prefix}:${plaintext}`;
 </script>
@@ -78,6 +95,9 @@ const shown = (prefix: string, plaintext: string) =>
     <ul v-if="linked.length" class="linked">
       <li v-for="l in linked" :key="l.prefix + l.plaintext">
         <ShieldCheck :size="14" class="ok" /> <span class="mono">{{ shown(l.prefix, l.plaintext) }}</span>
+        <button class="btn mini unlink" :disabled="busy || working || unlinking !== null" title="Revoke on chain" @click="unlink(l)">
+          <Unlink :size="12" /> {{ unlinking === l.prefix + l.plaintext ? 'Unlinking…' : 'Unlink' }}
+        </button>
       </li>
     </ul>
 
@@ -120,6 +140,7 @@ const shown = (prefix: string, plaintext: string) =>
 .lead { font-size: 0.84rem; line-height: 1.55; margin-bottom: 14px; }
 .linked { list-style: none; display: flex; flex-direction: column; gap: 6px; margin-bottom: 14px; }
 .linked li { display: flex; align-items: center; gap: 8px; font-size: 0.86rem; }
+.linked .unlink { margin-left: auto; }
 .ok { color: var(--emerald-400); }
 .providers { display: flex; flex-wrap: wrap; gap: 8px; }
 .mini { padding: 7px 12px; font-size: 0.8rem; }

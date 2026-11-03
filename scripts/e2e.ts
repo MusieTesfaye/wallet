@@ -236,6 +236,13 @@ try {
   await page.locator(".btn-close").click();
   await page.screenshot({ path: join(SHOTS, "wallet-e2e-identity.png"), fullPage: true });
 
+  // Alice unlinks her email: a revocation on chain, after which it resolves to no one.
+  await page.locator(".linked").getByRole("button", { name: /Unlink/ }).click();
+  for (let i = 0; i < 60 && (await resolveOnChain("mailto", "alice@example.com")) !== ""; i++) await sleep(250);
+  check("unlinking revokes it on chain: alice@example.com resolves to no one", (await resolveOnChain("mailto", "alice@example.com")) === "");
+  await page.locator(".linked").waitFor({ state: "detached", timeout: 10_000 }).catch(() => {});
+  check("the card no longer lists it", (await page.locator(".linked").count()) === 0);
+
   console.log("\nRefusals");
   const card = page.locator(".coin").first();
   await card.getByRole("button", { name: /Send/ }).click();

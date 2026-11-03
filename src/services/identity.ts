@@ -92,23 +92,15 @@ export function takeReturnedAttestation(): { attestation?: SignedAttestation; er
   return out;
 }
 
-/** Submits an attestation from its account, the account's consent; resolves once in a block. */
-export async function registerAttestation(account: KeylessAccount, a: SignedAttestation): Promise<number> {
-  if (a.account !== account.address) throw new Error('that attestation is for another account');
+/** Signs a transaction carrying `payload` from the account, fee in USDC; resolves once in a block. */
+async function submitFrom(account: KeylessAccount, payload: object): Promise<number> {
   await sena.loadSena();
   const [quote, acct, info] = await Promise.all([rpc.gasPrice(1), rpc.account(account.address), rpc.chainInfo()]);
   const unsigned = sena.buildTransaction({
     chainId: info.transaction_chain_id,
     sender: account.address,
     nonce: acct.nonce,
-    payload: {
-      kind: 'register_attestation',
-      identifier: a.identifier,
-      issuer: a.issuer,
-      account: a.account,
-      issued_on: a.issued_on,
-      signature: a.signature,
-    },
+    payload,
     feeAsset: 1,
     feeRate: quote.rate,
     feeIntrinsicGas: quote.intrinsic_gas,
@@ -117,6 +109,32 @@ export async function registerAttestation(account: KeylessAccount, a: SignedAtte
   });
   const hash = await rpc.submit(sena.signKeyless(unsigned, account.session, account.signature));
   return waitForBlock(hash);
+}
+
+/** Submits an attestation from its account, the account's consent; resolves once in a block. */
+export function registerAttestation(account: KeylessAccount, a: SignedAttestation): Promise<number> {
+  if (a.account !== account.address) return Promise.reject(new Error('that attestation is for another account'));
+  return submitFrom(account, {
+    kind: 'register_attestation',
+    identifier: a.identifier,
+    issuer: a.issuer,
+    account: a.account,
+    issued_on: a.issued_on,
+    signature: a.signature,
+  });
+}
+
+/** Revokes the issuer's attestation of an identifier to this account (Celo's revokeAttestation). */
+export async function revokeAttestation(account: KeylessAccount, l: LinkedIdentity): Promise<number> {
+  const info = await rpc.chainInfo();
+  await sena.loadSena();
+  const issuer = l.issuer ?? (await trustedIssuers())[0];
+  if (!issuer) throw new Error('no issuer is known for this identity');
+  return submitFrom(account, {
+    kind: 'revoke_attestation',
+    identifier: sena.hashIdentifier(l.prefix, l.plaintext, info.network_salt),
+    issuer,
+  });
 }
 
 /**
@@ -156,21 +174,34 @@ export async function resolve(prefix: string, plaintext: string): Promise<Resolu
 }
 
 /** The identifiers this browser has linked for an account, to show which it can be found by. */
+export interface LinkedIdentity {
+  prefix: string;
+  plaintext: string;
+  /** The issuer that attested it; absent for links remembered by older versions. */
+  issuer?: string;
+}
 const LINKED_KEY = 'sena.linked';
-export function linkedIdentities(account: string): { prefix: string; plaintext: string }[] {
+function readLinked(): Record<string, LinkedIdentity[]> {
   try {
-    return (JSON.parse(localStorage.getItem(LINKED_KEY) ?? '{}')[account] ?? []) as { prefix: string; plaintext: string }[];
+    return JSON.parse(localStorage.getItem(LINKED_KEY) ?? '{}');
   } catch {
-    return [];
+    return {};
   }
 }
-export function rememberLinked(account: string, prefix: string, plaintext: string) {
+function writeLinked(account: string, update: (list: LinkedIdentity[]) => LinkedIdentity[]) {
   try {
-    const all = JSON.parse(localStorage.getItem(LINKED_KEY) ?? '{}');
-    const list = (all[account] ?? []).filter((x: any) => !(x.prefix === prefix && x.plaintext.toLowerCase() === plaintext.toLowerCase()));
-    all[account] = [{ prefix, plaintext }, ...list];
+    const all = readLinked();
+    all[account] = update(all[account] ?? []);
     localStorage.setItem(LINKED_KEY, JSON.stringify(all));
   } catch {
-    // Storage unavailable: the identity is still linked on chain.
+    // Storage unavailable: the chain is still the record.
   }
 }
+const same = (a: LinkedIdentity, b: LinkedIdentity) =>
+  a.prefix === b.prefix && a.plaintext.toLowerCase() === b.plaintext.toLowerCase();
+
+export const linkedIdentities = (account: string): LinkedIdentity[] => readLinked()[account] ?? [];
+export const rememberLinked = (account: string, l: LinkedIdentity) =>
+  writeLinked(account, (list) => [l, ...list.filter((x) => !same(x, l))]);
+export const forgetLinked = (account: string, l: LinkedIdentity) =>
+  writeLinked(account, (list) => list.filter((x) => !same(x, l)));

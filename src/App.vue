@@ -85,7 +85,7 @@ async function registerAttestation(a: identity.SignedAttestation) {
   linking.value = true;
   try {
     const height = await identity.registerAttestation(owner, a);
-    identity.rememberLinked(owner.address, a.prefix, a.plaintext);
+    identity.rememberLinked(owner.address, { prefix: a.prefix, plaintext: a.plaintext, issuer: a.issuer });
     linkedTick.value++;
     say(`Linked ${label} in block #${height}: people can now pay you by it.`);
     refresh();

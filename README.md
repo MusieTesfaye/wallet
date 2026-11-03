@@ -1,8 +1,9 @@
 # SENA Wallet
 
 A browser wallet for [SENA](https://github.com/MusieTesfaye/SENA): sign in with
-Google, hold USDC, USDT, EURC and DAI, and send them. Each coin pays its own
-network fee, so USDT is sent with a USDT fee and EURC with an EURC fee.
+Google, hold USDC, USDT, EURC and DAI, and send them to an address, an email,
+a phone number or a username. Each coin pays its own network fee, so USDT is
+sent with a USDT fee and EURC with an EURC fee.
 
 Nothing is simulated:
 
@@ -17,6 +18,11 @@ Nothing is simulated:
 - **Balances, fees and history** come from the node's JSON-RPC.
 - **The faucet** (`server.ts`) sends ordinary signed transfers from an account
   funded at genesis, like any testnet faucet.
+- **Emails, phones and usernames** work as in Celo's SocialConnect. An issuer
+  (`issuer.ts`) checks you own one, through any OpenID Connect or OAuth 2
+  provider or an SMS code. It then signs an attestation, which your account
+  submits to the chain. Senders look the identifier up and trust only the
+  issuers they name.
 
 ## What you need
 
@@ -92,6 +98,46 @@ redirects back to the origin you registered.
 5. Switch to the second user: the coins are there. The activity list shows
    each transfer, its block and the fee, paid in the coin that was sent.
 
+## 5. Link an email, phone or username
+
+So that people can pay you at `alice@example.com` or `+1 555 010 1234`, link
+those to your account. This needs the issuer.
+
+1. Copy `issuer.config.example.json` to `issuer.config.json`. Keep the
+   providers you have credentials for, and delete the rest. Put the secrets in
+   `.env`; the config names them as `"env:NAME"`.
+2. For each sign-in provider, register
+   `http://localhost:3002/callback/<id>` as a redirect URI, where `<id>` is
+   the provider's `id` in the config (`google`, `apple`, `github`, ...). A
+   Google client for the issuer is a separate *Web application* client with a
+   client secret; the wallet's own Google client has none.
+3. Restart `bun run devnet`. It creates the issuer's key in
+   `.devnet/issuer.json` and starts the issuer on port 3002.
+4. In the wallet, **Identities → Link**, pick a provider and sign in there (or
+   enter the SMS code). The wallet submits the attestation; once it lands, the
+   identifier resolves to you.
+5. To pay someone, type their email, phone number (with country code) or
+   `prefix:name` in *To*, such as `github:octocat` or `twit:jack`. The wallet
+   shows the address it resolved before you send.
+
+**Any provider fits.** An `oidc` provider needs only its issuer URL; the issuer
+reads the rest from its discovery document. Apple is an `oidc` provider with
+`client_secret_jwt` and `form_post`. An `oauth2` provider needs its
+authorize, token and user-info URLs, and the claim in the user info that holds
+the username (`data.username`, for a nested one). `twilio_verify` sends SMS or
+WhatsApp codes. The `prefix` says what kind of identifier it attests: `mailto`
+for email, `tel` for phones, or a short lowercase name for a platform. Celo's
+`twit`, `github`, `discord`, `telegram` and others are listed in SENA's
+`sena_primitives::prefix`.
+
+**Trust.** By default the wallet trusts only the issuer at `VITE_ISSUER_URL`.
+To trust other issuers too, list their addresses in `VITE_TRUSTED_ISSUERS`.
+When two trusted issuers attest the same identifier to different accounts,
+the wallet refuses to pay it.
+
+**Unlinking.** **Identities → Unlink** revokes the attestation on chain. The
+issuer can revoke it too.
+
 ## How it is built
 
 | Path | What it does |
@@ -101,8 +147,11 @@ redirects back to the origin you registered.
 | `src/services/wallet.ts` | Quoting, building, signing and submitting a transfer |
 | `src/services/rpc.ts` | The node's JSON-RPC |
 | `server.ts` | The faucet |
+| `issuer.ts` | The attestation issuer: OIDC, OAuth 2 and Twilio Verify, configured in `issuer.config.json` |
+| `src/services/identity.ts` | Linking identities, and resolving a recipient through trusted issuers |
 | `scripts/devnet.ts` | `bun run devnet`: creates the chain, starts the node and the faucet |
 | `scripts/e2e.ts` | The browser test (below) |
+| `scripts/issuer-e2e.ts`, `scripts/test-providers.ts` | The issuer's test, and the stand-in providers it signs in with |
 
 ## Test
 
@@ -116,6 +165,19 @@ Chromium. For each coin, it:
 2. sends 12.50 of it;
 3. checks the fee was paid in that coin;
 4. checks every balance the wallet shows against the chain.
+
+It also links a phone number through the issuer and pays it by number.
+
+```sh
+bun run test:issuer ../SENA
+```
+
+This tests the issuer against a live node. No real provider can sign in during
+a test, so the test serves stand-ins: an OpenID Connect provider with its own
+RSA key, an OAuth 2 provider and a Twilio Verify API. They speak the same
+protocols the real ones do. It checks that an unverified email, a forged ID
+token, a foreign return address, a wrong code and a third party submitting
+someone's attestation are all refused.
 
 Google can't sign in during an automated test, so the browser is given the
 account a sign-in would leave in storage. It is built from Aptos's published
@@ -140,6 +202,12 @@ cargo run -q -p sena-wasm --example keyless_sample > target/keyless-sample.json
   keys Google published when the chain was created. After a rotation, new
   sign-ins fail until you run `bun run devnet --fresh`, because adding keys to
   a running chain needs a council vote, and no tool sends one yet.
+- **The issuer's key is a plain file** (`.devnet/issuer.json`). Whoever has
+  it can attest any identifier to any account that consents, so it is a devnet
+  issuer, not a production one.
+- **Identifiers are hashed with a public salt.** A phone number on chain can be
+  found by trying every number. Celo prevents this with ODIS, a rate-limited
+  service; SENA does not have one yet.
 - **Coins come only from the faucet.** Deposits from Aptos are not credited on
   the L2 yet.
 - **Aptos's keyless services are rate limited.** For heavier use, set
