@@ -58,6 +58,7 @@ const origin = window.location.origin;
         <span>{{ connectingSnap ? 'Waiting for MetaMask…' : 'Use MetaMask' }}</span>
       </button>
       <button v-if="adding" class="btn cancel" @click="emit('cancel')">Back to my wallet</button>
+      <a v-if="!isExtension()" class="ext-link" href="/sena-extension.zip" download>Or get the SENA browser extension</a>
     </template>
 
     <div v-if="error" class="alert alert-error err">{{ error }}</div>
@@ -65,6 +66,7 @@ const origin = window.location.origin;
 </template>
 
 <style scoped>
+.ext-link { font-size: 0.84rem; color: var(--text-secondary); text-decoration: underline; }
 .btn-metamask { display: inline-flex; align-items: center; gap: 10px; padding: 12px 22px; border-radius: 999px; font-weight: 600; }
 .hero {
   position: relative;

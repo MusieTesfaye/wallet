@@ -138,6 +138,61 @@ the wallet refuses to pay it.
 **Unlinking.** **Identities → Unlink** revokes the attestation on chain. The
 issuer can revoke it too.
 
+## 6. The browser extension
+
+The same wallet, as an extension for Chrome, Edge and Brave:
+
+```sh
+bun run build:extension     # dist-extension/ and sena-extension.zip
+```
+
+Load it: open `chrome://extensions` (Edge: `edge://extensions`), turn on
+**Developer mode**, choose **Load unpacked** and pick `dist-extension/`.
+
+Its id is fixed by the public key in `extension/key.txt`:
+**`phkknehihpoajnkoiabbbknbjaonflad`**. For Google sign-in, add
+`https://phkknehihpoajnkoiabbbknbjaonflad.chromiumapp.org/` to your Google
+OAuth client's **Authorised redirect URIs**. To link identities from the
+extension, add `https://phkknehihpoajnkoiabbbknbjaonflad.chromiumapp.org`
+and `chrome-extension://phkknehihpoajnkoiabbbknbjaonflad` to the issuer's
+`WALLET_ORIGINS`.
+
+Websites talk to it through `window.sena`:
+
+```js
+const [address] = await window.sena.request({ method: 'sena_requestAccounts' });
+const { hash, height } = await window.sena.request({
+  method: 'sena_sendTransfer',
+  params: { to: 'bob@gmail.com', asset: 1, amount: '2500000' }, // 2.50 USDC
+});
+```
+
+Connecting and every payment open the extension's own approval window. A
+site that has not connected gets nothing.
+
+## 7. MetaMask
+
+MetaMask cannot add SENA as a network, because SENA is not an Ethereum-format
+chain. Instead the **SENA Snap** (`snap/`) gives MetaMask a SENA account: an
+Ed25519 key from the MetaMask recovery phrase, with every transaction shown in
+MetaMask before it is signed. In the wallet, press **Use MetaMask**. See
+[`snap/README.md`](snap/README.md) for building, testing and publishing it.
+
+## 8. Deploy to Vercel
+
+1. Import this repository in Vercel. `vercel.json` sets the build: the
+   extension first (served at `/sena-extension.zip`), then the web wallet.
+2. Set the environment variables. `deploy/setup.sh` in SENA prints the URLs.
+   - `VITE_SENA_RPC_URL`, `VITE_FAUCET_URL`, `VITE_ISSUER_URL` and
+     `VITE_TRUSTED_ISSUERS` for your testnet;
+   - `VITE_GOOGLE_CLIENT_ID` for the Google sign-in;
+   - `VITE_SNAP_ID` (default `npm:@sena-network/snap`).
+3. In the Google OAuth client, add the Vercel address, e.g.
+   `https://sena-wallet.vercel.app`, under both *Authorised JavaScript
+   origins* and *Authorised redirect URIs* (with a trailing `/` for the
+   redirect). Do the same for the extension's `chromiumapp.org` address
+   above.
+
 ## How it is built
 
 | Path | What it does |
@@ -151,6 +206,9 @@ issuer can revoke it too.
 | `src/services/identity.ts` | Linking identities, and resolving a recipient through trusted issuers |
 | `scripts/devnet.ts` | `bun run devnet`: creates the chain, starts the node and the faucet |
 | `scripts/e2e.ts` | The browser test (below) |
+| `extension/`, `scripts/extension-e2e.ts` | The extension's worker, content scripts and manifest, and its test |
+| `src/components/Approval.vue` | The extension's approval window for websites |
+| `snap/` | The MetaMask Snap |
 | `scripts/issuer-e2e.ts`, `scripts/test-providers.ts` | The issuer's test, and the stand-in providers it signs in with |
 
 ## Test
@@ -170,6 +228,8 @@ It also links a phone number through the issuer and pays it by number.
 
 ```sh
 bun run test:issuer ../SENA
+bun run test:extension ../SENA   # the extension, loaded into Chromium
+cd snap && npm test              # the Snap, in MetaMask's simulator
 ```
 
 This tests the issuer against a live node. No real provider can sign in during
